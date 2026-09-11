@@ -1,0 +1,49 @@
+# Keeps the scheduled workflows enabled.
+#
+# GitHub disables the scheduled workflows in a repository after 60 days without
+# repository activity. Published releases do not reset that timer reliably. This
+# workflow writes a commit when the last commit is more than 45 days old, which
+# resets the timer before the deadline.
+#
+# Permissions: contents: write, to push the commit.
+
+name: Keepalive
+
+on:
+  schedule:
+    - cron: "25 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    name: Commit when the repository is quiet
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+
+      - name: Write a commit when the last commit is old
+        run: |
+          set -euo pipefail
+          MAX_QUIET_DAYS=45
+          LAST="$(git log -1 --format=%ct)"
+          DAYS=$(( ( $(date +%s) - LAST ) / 86400 ))
+          echo "The last commit is ${DAYS} days old. The limit is ${MAX_QUIET_DAYS} days."
+
+          if [ "$DAYS" -lt "$MAX_QUIET_DAYS" ]; then
+            echo "The repository is active. No commit is needed."
+            exit 0
+          fi
+
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > .github/keepalive
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive
+          git commit -m "Update the keepalive timestamp"
+          git push
+          echo "Pushed a keepalive commit. The scheduled workflows stay enabled."

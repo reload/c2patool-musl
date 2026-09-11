@@ -1,0 +1,124 @@
+# Looks for a newer upstream c2patool release once a day and builds it.
+# Only the newest upstream release is built. To build any other version, run
+# the "Build and release" workflow by hand.
+#
+# Permissions: contents: write and issues: write, because this workflow calls
+# the build workflow and passes its own permissions down.
+
+name: Check upstream
+
+on:
+  schedule:
+    - cron: "40 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_REPO: contentauth/c2pa-rs
+
+jobs:
+  check:
+    name: Compare upstream against this repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      needs_build: ${{ steps.compare.outputs.needs_build }}
+      version: ${{ steps.compare.outputs.version }}
+    steps:
+      - name: Compare the newest upstream release against the newest release here
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Upstream tags a c2patool release as c2patool-vX.Y.Z in the c2pa-rs
+          # repository. The releases for the other crates are ignored.
+          UPSTREAM="$(gh api "repos/${UPSTREAM_REPO}/releases?per_page=100" \
+            --jq '.[] | select(.draft == false) | select(.prerelease == false)
+                  | select(.tag_name | startswith("c2patool-v")) | .tag_name' \
+            | sed 's/^c2patool-v//' | sort -V | tail -n 1)"
+
+          OURS="$(gh release list --limit 200 --json tagName,isDraft \
+            --jq '.[] | select(.isDraft == false) | .tagName' \
+            | sed 's/^c2patool-v//' | sort -V | tail -n 1)"
+
+          echo "Newest upstream release: ${UPSTREAM:-none}"
+          echo "Newest release here:     ${OURS:-none}"
+
+          if [ -z "$UPSTREAM" ]; then
+            echo "::error::No upstream c2patool release was found. The API or the tag naming changed."
+            exit 1
+          fi
+
+          NEWEST="$(printf '%s\n%s\n' "${OURS:-0.0.0}" "$UPSTREAM" | sort -V | tail -n 1)"
+          if [ "$UPSTREAM" = "$OURS" ] || [ "$NEWEST" != "$UPSTREAM" ]; then
+            echo "Decision: nothing to do. Upstream ${UPSTREAM} is already published here."
+            echo "needs_build=false" >> "$GITHUB_OUTPUT"
+            SUMMARY="Nothing to do. Upstream is \`${UPSTREAM}\`, published here is \`${OURS:-none}\`."
+          else
+            echo "Decision: build ${UPSTREAM}."
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+            echo "version=${UPSTREAM}" >> "$GITHUB_OUTPUT"
+            SUMMARY="Building \`${UPSTREAM}\`. Published here is \`${OURS:-none}\`."
+          fi
+
+          {
+            echo "## Upstream check"
+            echo ""
+            echo "$SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build the new version
+    needs: check
+    if: needs.check.outputs.needs_build == 'true'
+    permissions:
+      contents: write
+      issues: write
+    uses: ./.github/workflows/build-release.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+
+  report-failure:
+    name: Report the failure
+    needs: check
+    # Only a failure of the check job is reported here. A failed build reports
+    # itself, so one failure never opens two issues.
+    if: failure() && needs.check.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open the failure issue, or comment on the open one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="The daily upstream check failed on $(date -u +'%Y-%m-%d %H:%M UTC').
+
+          Run: ${RUN_URL}
+
+          This issue stays open and collects a comment for every later failure.
+          Close it after the cause is fixed. The next failure opens a new one."
+
+          gh label create build-failure --color B60205 \
+            --description "An automated build or upstream check failed" 2>/dev/null || true
+
+          NUMBER="$(gh issue list --state open --label build-failure --limit 1 \
+            --json number --jq '.[0].number // empty')"
+
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body "$BODY"
+          else
+            gh issue create \
+              --title "The daily upstream check failed" \
+              --label build-failure \
+              --body "$BODY"
+          fi

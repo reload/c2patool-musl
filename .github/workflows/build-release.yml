@@ -1,0 +1,222 @@
+# Builds one upstream c2patool version for x86_64-unknown-linux-musl and
+# publishes it as a release in this repository.
+#
+# Permissions: contents: write, to create the release. issues: write, to report
+# a failure. Nothing else.
+
+name: Build and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Upstream c2patool version, for example 0.27.22"
+        required: true
+        type: string
+      force:
+        description: "Publish again, even when the release already exists"
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      force:
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: contentauth/c2pa-rs
+  RUST_IMAGE: rust:1.98.1-alpine3.24
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  build:
+    name: Build, test and publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+
+      - name: Read the version input
+        id: version
+        run: |
+          set -euo pipefail
+          RAW="${{ inputs.version }}"
+          # Accepts 0.27.22, v0.27.22 and c2patool-v0.27.22.
+          V="${RAW#c2patool-}"
+          V="${V#v}"
+          if ! printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'${RAW}' is not a version number such as 0.27.22."
+            exit 1
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "tag=c2patool-v${V}" >> "$GITHUB_OUTPUT"
+          echo "Building c2patool ${V}"
+
+      - name: Skip a version that is already published
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ "${{ inputs.force }}" = "true" ]; then
+              echo "${TAG} exists. The force input is set, so it is deleted and built again."
+              gh release delete "$TAG" --yes --cleanup-tag
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "${TAG} is already published. Nothing to do."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Make sure that the upstream release exists
+        if: steps.published.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          if ! gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::${UPSTREAM_REPO} has no release tagged ${TAG}."
+            exit 1
+          fi
+          echo "Upstream release ${TAG} found."
+
+      - name: Build the static musl binary
+        id: build
+        if: steps.published.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          V="${{ steps.version.outputs.version }}"
+          if ./scripts/build.sh "$V" dist; then
+            echo "deferred=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The build failed. An upstream GitHub release can appear a few
+          # seconds before the crates.io publish. If crates.io does not have
+          # this version yet, the next scheduled run takes it. Do not fail.
+          echo "The build failed. Checking whether crates.io has ${V} yet."
+          if curl -fsS -H "User-Agent: reload/c2patool-musl" \
+              "https://crates.io/api/v1/crates/c2patool/${V}" >/dev/null 2>&1; then
+            echo "::error::The build failed and crates.io has ${V}. This is a real failure."
+            exit 1
+          fi
+
+          echo "::warning::crates.io does not have c2patool ${V} yet. \
+          This version is left for the next scheduled run."
+          echo "deferred=true" >> "$GITHUB_OUTPUT"
+
+      - name: Test the binary in alpine and in debian
+        if: steps.published.outputs.skip != 'true' && steps.build.outputs.deferred != 'true'
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          ./scripts/smoke-test.sh "dist/c2patool-v${V}-${TARGET}.tar.gz" "$V"
+
+      - name: Publish the release
+        if: steps.published.outputs.skip != 'true' && steps.build.outputs.deferred != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          # A hand-built older version must not move the latest release
+          # backwards, because /releases/latest/download/ points at it.
+          HIGHEST="$(gh release list --limit 200 --json tagName,isDraft \
+            --jq '.[] | select(.isDraft == false) | .tagName' \
+            | sed 's/^c2patool-v//' | sort -V | tail -n 1)"
+          if [ -z "$HIGHEST" ] || [ "$(printf '%s\n%s\n' "$HIGHEST" "$V" | sort -V | tail -n 1)" = "$V" ]; then
+            LATEST=true
+          else
+            LATEST=false
+          fi
+          echo "Highest published version: ${HIGHEST:-none}. Mark as latest: ${LATEST}."
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file dist/release-notes.md \
+            --latest="$LATEST" \
+            "dist/c2patool-v${V}-${TARGET}.tar.gz" \
+            "dist/c2patool-${TARGET}.tar.gz" \
+            dist/SHA256SUMS
+
+          echo "Published ${TAG}."
+
+      - name: Write the run summary
+        if: always() && steps.published.outputs.skip != 'true'
+        run: |
+          set -uo pipefail
+          V="${{ steps.version.outputs.version }}"
+          {
+            echo "## c2patool ${V}"
+            if [ "${{ steps.build.outputs.deferred }}" = "true" ]; then
+              echo "Deferred. crates.io does not have this version yet."
+            elif [ -f dist/build-info.env ]; then
+              echo '```'
+              cat dist/build-info.env
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  report-failure:
+    name: Report the failure
+    needs: build
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open the failure issue, or comment on the open one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          VERSION="${{ inputs.version }}"
+          BODY="The build of c2patool \`${VERSION}\` failed on $(date -u +'%Y-%m-%d %H:%M UTC').
+
+          Run: ${RUN_URL}
+
+          This issue stays open and collects a comment for every later failure.
+          Close it after the cause is fixed. The next failure opens a new one."
+
+          # The label may not exist yet in a new repository.
+          gh label create build-failure --color B60205 \
+            --description "An automated build or upstream check failed" 2>/dev/null || true
+
+          NUMBER="$(gh issue list --state open --label build-failure --limit 1 \
+            --json number --jq '.[0].number // empty')"
+
+          if [ -n "$NUMBER" ]; then
+            echo "Commenting on the open issue #${NUMBER}."
+            gh issue comment "$NUMBER" --body "$BODY"
+          else
+            echo "Opening a new issue."
+            gh issue create \
+              --title "Automated build failed" \
+              --label build-failure \
+              --body "$BODY"
+          fi

@@ -1,0 +1,31 @@
+c2patool-musl
+=============
+
+This repository redistributes unmodified upstream source code, compiled for a
+target that the upstream project does not publish.
+
+Upstream project: c2patool, part of c2pa-rs
+Upstream source:  https://github.com/contentauth/c2pa-rs
+Copyright:        2020 Adobe. All rights reserved.
+License:          MIT OR Apache-2.0
+
+This repository contains no upstream source code. Every release is compiled
+from the upstream release tag named in that release, or from the matching
+crates.io package. The source is never patched, vendored or modified. The only
+change is the target triple, x86_64-unknown-linux-musl.
+
+Every release states the upstream tag it was built from, the compiler version
+and the sha256 of the archive. Each release archive also contains a
+MUSL-BUILD.txt file that repeats that information.
+
+Each release archive keeps the files that upstream shipped in the same release,
+with one change. The glibc binary is replaced by the musl binary.
+
+The upstream license texts are in LICENSE-MIT and LICENSE-APACHE. The upstream
+project is dual licensed. You can use it under either license. GitHub reports
+the license of c2pa-rs as NOASSERTION, because GitHub cannot detect a dual
+license.
+
+This repository is not an official ContentAuth or Adobe distribution. Adobe and
+ContentAuth do not produce, review, endorse or support these builds. No Adobe or
+ContentAuth trademark or logo is used here.
