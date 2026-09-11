@@ -27,7 +27,7 @@ jobs:
       version: ${{ steps.compare.outputs.version }}
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -102,7 +102,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/report-failure

@@ -131,28 +131,31 @@ tasks:
       - rm -rf .c2patool-download
 ```
 
-### Upsun
+### In a container image or a server build step
 
-Upsun runs on x86_64, so the target is fixed there.
+When you know the architecture of the machine the build runs on, fix the target
+rather than detecting it.
 
-```yaml
-hooks:
-    build: |
-        set -e
-        C2PATOOL_VERSION=0.27.22
-        C2PATOOL_TARGET=x86_64-unknown-linux-musl
-        ARCHIVE="c2patool-v${C2PATOOL_VERSION}-${C2PATOOL_TARGET}.tar.gz"
-        BASE="https://github.com/reload/c2patool-musl/releases/download/c2patool-v${C2PATOOL_VERSION}"
-        mkdir -p "$PLATFORM_APP_DIR/bin" /tmp/c2patool
-        cd /tmp/c2patool
-        curl -fsSL -O "${BASE}/${ARCHIVE}"
-        curl -fsSL -O "${BASE}/SHA256SUMS"
-        sha256sum -c --ignore-missing SHA256SUMS
-        tar xzf "$ARCHIVE" -C "$PLATFORM_APP_DIR/bin" --strip-components=1 c2patool/c2patool
-        cd - && rm -rf /tmp/c2patool
+```sh
+set -e
+C2PATOOL_VERSION=0.27.22
+C2PATOOL_TARGET=x86_64-unknown-linux-musl
+INSTALL_DIR=/usr/local/bin
+
+ARCHIVE="c2patool-v${C2PATOOL_VERSION}-${C2PATOOL_TARGET}.tar.gz"
+BASE="https://github.com/reload/c2patool-musl/releases/download/c2patool-v${C2PATOOL_VERSION}"
+
+mkdir -p "$INSTALL_DIR" /tmp/c2patool
+cd /tmp/c2patool
+curl -fsSL -O "${BASE}/${ARCHIVE}"
+curl -fsSL -O "${BASE}/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS
+tar xzf "$ARCHIVE" -C "$INSTALL_DIR" --strip-components=1 c2patool/c2patool
+cd - >/dev/null && rm -rf /tmp/c2patool
 ```
 
-The binary is about 29 MB. Upsun counts it against the build output size.
+The binary is about 29 MB on x86_64 and about 25 MB on arm64. It counts against
+any limit on the size of a build output.
 
 ## Make sure that a download is correct
 

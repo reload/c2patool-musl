@@ -56,7 +56,7 @@ jobs:
       age_hours: ${{ steps.upstream.outputs.age_hours }}
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -173,7 +173,7 @@ jobs:
 
       - name: Keep them for the build jobs
         if: steps.release.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aux
           path: aux/
@@ -192,14 +192,14 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # This job compiles upstream source and runs upstream build scripts.
           # It must not carry a credential.
           persist-credentials: false
 
       - name: Take the files that upstream ships beside the binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aux
           path: aux
@@ -247,7 +247,7 @@ jobs:
           ./scripts/smoke-test.sh "dist/$(archive_for "$V" "${{ matrix.target }}")" "$V"
 
       - name: Hand the result to the publish job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.target }}
           path: dist/
@@ -262,12 +262,12 @@ jobs:
       contents: write
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Collect every target
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: build-*
           path: dist
@@ -383,7 +383,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/report-failure
