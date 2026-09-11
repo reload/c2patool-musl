@@ -8,6 +8,17 @@ produce, review, endorse or support these binaries. [Reload](https://github.com/
 maintains this repository and has no connection to upstream beyond the source it
 compiles.
 
+- [Why](#why)
+- [Install](#install)
+  - [Taskfile](#taskfile)
+- [Build it by hand](#build-it-by-hand)
+- [How it works](#how-it-works)
+  - [Build and release](#build-and-release)
+  - [Check upstream](#check-upstream)
+  - [Keepalive](#keepalive)
+  - [Failures and checks](#failures-and-checks)
+- [License](#license)
+
 ## Why
 
 `c2patool` reads C2PA manifests, also called Content Credentials, out of media
