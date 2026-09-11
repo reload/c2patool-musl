@@ -1,0 +1,37 @@
+# The workflows and the scripts are this repository's product, so a shell
+# mistake in them is a real defect. This finds one in seconds, not after a ten
+# minute build.
+#
+# Permissions: contents: read.
+
+name: Lint
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  lint:
+    name: Check the workflows and the scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Pinned images, so no third party GitHub action is trusted.
+      - name: Check the workflows
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+
+      - name: Check the scripts
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 -S warning scripts/*.sh
+
+      - name: Audit the workflows for security mistakes
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo ghcr.io/zizmorcore/zizmor:1.17.0 --offline .

@@ -1,0 +1,52 @@
+name: Report a failure
+description: >
+  Opens one issue for an automated failure, or adds a comment to the open one.
+  A daily failure then produces one issue and one comment per day, not one issue
+  per day. The calling job needs the issues write permission.
+
+inputs:
+  title:
+    description: Title for a new issue.
+    required: true
+  what-failed:
+    description: One sentence naming what failed.
+    required: true
+  token:
+    description: "Token with the issues write permission."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Open the failure issue, or comment on the open one
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        TITLE: ${{ inputs.title }}
+        WHAT_FAILED: ${{ inputs.what-failed }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+
+        BODY="${WHAT_FAILED} on $(date -u +'%Y-%m-%d %H:%M UTC').
+
+        Run: ${RUN_URL}
+
+        This issue stays open and collects a comment for every later failure.
+        Close it after the cause is fixed. The next failure opens a new one."
+
+        # The label may not exist yet in a new repository.
+        gh label create build-failure --color B60205 \
+          --description "An automated build or upstream check failed" 2>/dev/null || true
+
+        NUMBER="$(gh issue list --state open --label build-failure --limit 1 \
+          --json number --jq '.[0].number // empty')"
+
+        if [ -n "$NUMBER" ]; then
+          echo "Commenting on the open issue #${NUMBER}."
+          gh issue comment "$NUMBER" --body "$BODY"
+        else
+          echo "Opening a new issue."
+          gh issue create --title "$TITLE" --label build-failure --body "$BODY"
+        fi
