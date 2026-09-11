@@ -8,6 +8,15 @@
 set -eu
 
 VERSION="${1:?usage: build-in-container.sh <version>}"
+
+# Everything under /out and /build is written by root inside this container.
+# The ownership is handed back, so that the host can read and delete the files.
+give_files_back() {
+    if [ -n "${HOST_UID:-}" ]; then
+        chown -R "${HOST_UID}:${HOST_GID}" /out /build 2>/dev/null || true
+    fi
+}
+trap give_files_back EXIT
 TAG="c2patool-v${VERSION}"
 GIT_URL="https://github.com/contentauth/c2pa-rs"
 WANT_TARGET="x86_64-unknown-linux-musl"
@@ -48,12 +57,16 @@ SIZE_UNSTRIPPED="$(wc -c < /build/out/bin/c2patool | tr -d ' ')"
 strip -o /out/c2patool /build/out/bin/c2patool
 SIZE_STRIPPED="$(wc -c < /out/c2patool | tr -d ' ')"
 
+# The values are single quoted, because the build script reads this file with
+# the shell. A rustc version string contains spaces and brackets.
+quote() { printf "%s" "$1" | tr -d "'"; }
+
 cat > /out/build-info.env <<INFO
-RUSTC_VERSION=${RUSTC_VERSION}
-BUILD_SOURCE=${BUILD_SOURCE}
-BUILD_SOURCE_KIND=${BUILD_SOURCE_KIND}
-SIZE_UNSTRIPPED=${SIZE_UNSTRIPPED}
-SIZE_STRIPPED=${SIZE_STRIPPED}
+RUSTC_VERSION='$(quote "$RUSTC_VERSION")'
+BUILD_SOURCE='$(quote "$BUILD_SOURCE")'
+BUILD_SOURCE_KIND='${BUILD_SOURCE_KIND}'
+SIZE_UNSTRIPPED='${SIZE_UNSTRIPPED}'
+SIZE_STRIPPED='${SIZE_STRIPPED}'
 INFO
 
 echo ">>> built ${SIZE_STRIPPED} bytes stripped, from ${BUILD_SOURCE}"

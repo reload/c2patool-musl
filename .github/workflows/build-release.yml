@@ -52,9 +52,13 @@ jobs:
 
       - name: Read the version input
         id: version
+        env:
+          # The input is passed through the environment, never interpolated
+          # into the script. A workflow input must not become shell code.
+          RAW_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          RAW="${{ inputs.version }}"
+          RAW="$RAW_VERSION"
           # Accepts 0.27.22, v0.27.22 and c2patool-v0.27.22.
           V="${RAW#c2patool-}"
           V="${V#v}"
@@ -192,11 +196,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RAW_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          VERSION="${{ inputs.version }}"
-          BODY="The build of c2patool \`${VERSION}\` failed on $(date -u +'%Y-%m-%d %H:%M UTC').
+          BODY="The build of c2patool \`${RAW_VERSION}\` failed on $(date -u +'%Y-%m-%d %H:%M UTC').
 
           Run: ${RUN_URL}
 

@@ -36,6 +36,8 @@ curl_gh() {
 echo "==> Building c2patool ${VERSION} for ${TARGET} in ${RUST_IMAGE}"
 mkdir -p "${WORK}/out" "${WORK}/build"
 docker run --rm \
+    -e HOST_UID="$(id -u)" \
+    -e HOST_GID="$(id -g)" \
     -v "${REPO_ROOT}/scripts:/scripts:ro" \
     -v "${WORK}/out:/out" \
     -v "${WORK}/build:/build" \
@@ -102,10 +104,11 @@ SHA256="$(awk -v f="$ARCHIVE" '$2 == f || $2 == "*"f {print $1}' "${OUTDIR}/SHA2
 
 cp "${WORK}/out/build-info.env" "${OUTDIR}/build-info.env"
 cat >> "${OUTDIR}/build-info.env" <<INFO
-ARCHIVE=${ARCHIVE}
-LATEST_ARCHIVE=${LATEST_ARCHIVE}
-SHA256=${SHA256}
-FILE_OUTPUT=${FILE_OUTPUT}
+ARCHIVE='${ARCHIVE}'
+LATEST_ARCHIVE='${LATEST_ARCHIVE}'
+SHA256='${SHA256}'
+FILE_OUTPUT='$(printf "%s" "$FILE_OUTPUT" | tr -d "'")'
+RUST_IMAGE='${RUST_IMAGE}'
 INFO
 
 cat > "${OUTDIR}/release-notes.md" <<INFO
