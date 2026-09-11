@@ -7,6 +7,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Do not adopt a release on its first day.
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]

@@ -14,18 +14,20 @@ on:
     - cron: "25 5 * * 1"
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   keepalive:
     name: Commit when the repository is quiet
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      # Keeps its credentials on purpose: this job pushes. It uploads no
+      # artifacts, so the credential cannot leave the runner.
       - name: Check out this repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
 
       - name: Write a commit when the last commit is old
         run: |
@@ -53,14 +55,16 @@ jobs:
     needs: keepalive
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
+      contents: read
       issues: write
     concurrency:
       group: report-failure
       cancel-in-progress: false
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/report-failure

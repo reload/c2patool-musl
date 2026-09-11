@@ -11,13 +11,13 @@ on:
     - cron: "40 6 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   check:
     name: Compare upstream against this repository
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -25,7 +25,7 @@ jobs:
       version: ${{ steps.compare.outputs.version }}
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -102,14 +102,16 @@ jobs:
     # A failed build reports itself, so never report it twice.
     if: failure() && needs.check.result == 'failure' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
+      contents: read
       issues: write
     concurrency:
       group: report-failure
       cancel-in-progress: false
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/report-failure

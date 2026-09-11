@@ -30,8 +30,7 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: publish-release
@@ -41,6 +40,7 @@ jobs:
   prepare:
     name: Decide what to build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -52,7 +52,7 @@ jobs:
       age_hours: ${{ steps.upstream.outputs.age_hours }}
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -82,10 +82,10 @@ jobs:
         id: upstream
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           . ./scripts/config.sh
-          TAG="${{ steps.version.outputs.tag }}"
 
           if ! PUBLISHED="$(gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG}" --jq .published_at 2>/dev/null)"; then
             echo "::error::${UPSTREAM_REPO} has no release tagged ${TAG}."
@@ -101,11 +101,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          V: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
           . ./scripts/config.sh
-          V="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
 
           MISSING=""
           if ! RELEASE="$(gh release view "$TAG" --json isDraft,assets 2>/dev/null)"; then
@@ -129,7 +130,7 @@ jobs:
 
           case "$STATE" in
             complete)
-              if [ "${{ inputs.force }}" = "true" ]; then
+              if [ "$FORCE" = "true" ]; then
                 echo "The force input is set, so it is built again."
                 echo "skip=false" >> "$GITHUB_OUTPUT"
               else
@@ -138,7 +139,7 @@ jobs:
               fi
               ;;
             incomplete)
-              if [ "${{ inputs.force }}" = "true" ]; then
+              if [ "$FORCE" = "true" ]; then
                 echo "skip=false" >> "$GITHUB_OUTPUT"
               else
                 # Rebuilding replaces checksums consumers pinned, so a person
@@ -157,15 +158,17 @@ jobs:
         if: steps.release.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./scripts/fetch-aux.sh "${{ steps.version.outputs.version }}" aux
+          V: ${{ steps.version.outputs.version }}
+        run: ./scripts/fetch-aux.sh "$V" aux
 
       - name: Keep them for the build jobs
         if: steps.release.outputs.skip != 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: aux
           path: aux/
           include-hidden-files: true
+          if-no-files-found: error
           retention-days: 1
 
   build:
@@ -173,6 +176,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.skip != 'true'
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -180,13 +184,13 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # This job runs upstream build scripts. It must carry no credential.
           persist-credentials: false
 
       - name: Take the files that upstream ships beside the binary
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aux
           path: aux
@@ -196,9 +200,10 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           AUX_DIR: aux
+          V: ${{ needs.prepare.outputs.version }}
+          AGE: ${{ needs.prepare.outputs.age_hours }}
         run: |
           set -uo pipefail
-          V="${{ needs.prepare.outputs.version }}"
           mkdir -p dist
 
           # GitHub runs this step as `bash -e`, which `set -uo pipefail` does
@@ -215,7 +220,6 @@ jobs:
             exit "$STATUS"
           fi
 
-          AGE="${{ needs.prepare.outputs.age_hours }}"
           if [ "$AGE" -ge 24 ]; then
             # A publish takes minutes. A day later, deferring hides a fault.
             echo "::error::${V} was released upstream ${AGE} hours ago, the tag build fails, and crates.io still does not have it."
@@ -228,17 +232,20 @@ jobs:
 
       - name: Test the binary in every target image
         if: hashFiles('dist/DEFERRED') == ''
+        env:
+          V: ${{ needs.prepare.outputs.version }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           . ./scripts/config.sh
-          V="${{ needs.prepare.outputs.version }}"
-          ./scripts/smoke-test.sh "dist/$(archive_for "$V" "${{ matrix.target }}")" "$V"
+          ./scripts/smoke-test.sh "dist/$(archive_for "$V" "$TARGET")" "$V"
 
       - name: Hand the result to the publish job
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-${{ matrix.target }}
           path: dist/
+          if-no-files-found: error
           retention-days: 1
 
   publish:
@@ -246,16 +253,17 @@ jobs:
     needs: [prepare, build]
     if: needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Collect every target
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: build-*
           path: dist
@@ -274,10 +282,11 @@ jobs:
 
       - name: Assemble the release assets
         if: steps.deferred.outputs.deferred != 'true'
+        env:
+          V: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           . ./scripts/config.sh
-          V="${{ needs.prepare.outputs.version }}"
 
           # A partial release would be worse than none.
           while read -r T; do
@@ -299,12 +308,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          V: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          STATE: ${{ needs.prepare.outputs.release_state }}
         run: |
           set -euo pipefail
           . ./scripts/config.sh
-          V="${{ needs.prepare.outputs.version }}"
-          TAG="${{ needs.prepare.outputs.tag }}"
-          STATE="${{ needs.prepare.outputs.release_state }}"
 
           ASSETS=(dist/SHA256SUMS)
           while read -r T; do
@@ -347,9 +356,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG="${{ needs.prepare.outputs.tag }}"
 
           # Uploads happen one at a time, so a failure can leave archives from
           # one build beside checksums from another.
@@ -361,10 +370,12 @@ jobs:
 
       - name: Write the run summary
         if: always()
+        env:
+          V: ${{ needs.prepare.outputs.version }}
         run: |
           set -uo pipefail
           {
-            echo "## c2patool ${{ needs.prepare.outputs.version }}"
+            echo "## c2patool ${V}"
             echo ""
             if [ -f dist/DEFERRED ]; then
               echo "Deferred. crates.io does not have this version yet."
@@ -378,14 +389,16 @@ jobs:
     needs: [prepare, build, publish]
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
+      contents: read
       issues: write
     concurrency:
       group: report-failure
       cancel-in-progress: false
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/report-failure
