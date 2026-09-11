@@ -42,8 +42,10 @@ jobs:
 
           # Upstream tags a c2patool release as c2patool-vX.Y.Z in the c2pa-rs
           # repository. The releases for the other crates are ignored.
+          # gh api --jq takes one argument and cannot pass a variable, so the
+          # filter runs in jq itself.
           UPSTREAM="$(gh api "repos/${UPSTREAM_REPO}/releases?per_page=100" \
-            --jq --arg p "$TAG_PREFIX" '.[] | select(.draft == false) | select(.prerelease == false)
+            | jq -r --arg p "$TAG_PREFIX" '.[] | select(.draft == false) | select(.prerelease == false)
                   | select(.tag_name | startswith($p)) | .tag_name' \
             | sed "s/^${TAG_PREFIX}//" | sort -V | tail -n 1)"
 
