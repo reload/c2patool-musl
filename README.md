@@ -78,11 +78,17 @@ VERSION=0.27.22
 TARGET=x86_64-unknown-linux-musl
 BASE=https://github.com/reload/c2patool-musl/releases/download/c2patool-v${VERSION}
 
-curl -fsSL -O "${BASE}/c2patool-v${VERSION}-${TARGET}.tar.gz"
+ARCHIVE="c2patool-v${VERSION}-${TARGET}.tar.gz"
+
+curl -fsSL -O "${BASE}/${ARCHIVE}"
 curl -fsSL -O "${BASE}/SHA256SUMS"
-sha256sum -c --ignore-missing SHA256SUMS
-tar xzf "c2patool-v${VERSION}-${TARGET}.tar.gz" -C /usr/local/bin --strip-components=1 c2patool/c2patool
+grep " ${ARCHIVE}\$" SHA256SUMS | sha256sum -c -
+tar xzf "$ARCHIVE" -C /usr/local/bin --strip-components=1 c2patool/c2patool
 ```
+
+The single line is taken out of `SHA256SUMS` first, because BusyBox, which is
+what Alpine uses, has no `--ignore-missing` option. On macOS, write
+`shasum -a 256 -c -` in place of `sha256sum -c -`.
 
 ### Always take the newest version
 
@@ -126,7 +132,14 @@ tasks:
       - mkdir -p bin .c2patool-download
       - curl -fsSL -o .c2patool-download/{{.ARCHIVE}} {{.BASE}}/{{.ARCHIVE}}
       - curl -fsSL -o .c2patool-download/SHA256SUMS {{.BASE}}/SHA256SUMS
-      - cd .c2patool-download && sha256sum -c --ignore-missing SHA256SUMS
+      # macOS has shasum and no sha256sum. Linux usually has both.
+      - |
+        cd .c2patool-download
+        if command -v sha256sum >/dev/null 2>&1; then
+          grep ' {{.ARCHIVE}}$' SHA256SUMS | sha256sum -c -
+        else
+          grep ' {{.ARCHIVE}}$' SHA256SUMS | shasum -a 256 -c -
+        fi
       - tar xzf .c2patool-download/{{.ARCHIVE}} -C bin --strip-components=1 c2patool/c2patool
       - rm -rf .c2patool-download
 ```
@@ -149,7 +162,7 @@ mkdir -p "$INSTALL_DIR" /tmp/c2patool
 cd /tmp/c2patool
 curl -fsSL -O "${BASE}/${ARCHIVE}"
 curl -fsSL -O "${BASE}/SHA256SUMS"
-sha256sum -c --ignore-missing SHA256SUMS
+grep " ${ARCHIVE}\$" SHA256SUMS | sha256sum -c -
 tar xzf "$ARCHIVE" -C "$INSTALL_DIR" --strip-components=1 c2patool/c2patool
 cd - >/dev/null && rm -rf /tmp/c2patool
 ```
@@ -167,10 +180,14 @@ VERSION=0.27.22
 TARGET=x86_64-unknown-linux-musl
 BASE=https://github.com/reload/c2patool-musl/releases/download/c2patool-v${VERSION}
 
-curl -fsSL -O "${BASE}/c2patool-v${VERSION}-${TARGET}.tar.gz"
+ARCHIVE="c2patool-v${VERSION}-${TARGET}.tar.gz"
+
+curl -fsSL -O "${BASE}/${ARCHIVE}"
 curl -fsSL -O "${BASE}/SHA256SUMS"
-sha256sum -c --ignore-missing SHA256SUMS
+grep " ${ARCHIVE}\$" SHA256SUMS | sha256sum -c -
 ```
+
+On macOS, write `shasum -a 256 -c -` in place of `sha256sum -c -`.
 
 The same checksums are printed in the release notes. The archive contains a
 `MUSL-BUILD.txt` file that names the upstream tag and the compiler version.

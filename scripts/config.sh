@@ -66,6 +66,26 @@ latest_archive_for() {
     printf 'c2patool-%s.tar.gz' "$1"
 }
 
+# Prints every asset name a complete release of this version must hold.
+expected_assets() {
+    printf '%s\n' "SHA256SUMS"
+    for _t in $(supported_targets); do
+        archive_for "$1" "$_t"; printf '\n'
+        latest_archive_for "$_t"; printf '\n'
+    done
+}
+
+# Prints the asset names that the given release is missing. Reads the output of
+# `gh release view --json assets` on standard input.
+missing_assets() {
+    _release="$(cat)"
+    for _a in $(expected_assets "$1"); do
+        if ! printf '%s' "$_release" | jq -e --arg a "$_a" 'any(.assets[]; .name == $a)' >/dev/null; then
+            printf '%s\n' "$_a"
+        fi
+    done
+}
+
 # Prints the target triple for the architecture of the machine that runs this.
 target_for_host_arch() {
     case "$(uname -m)" in

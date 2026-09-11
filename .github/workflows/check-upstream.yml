@@ -63,9 +63,20 @@ jobs:
 
           NEWEST="$(printf '%s\n%s\n' "${OURS:-0.0.0}" "$UPSTREAM" | sort -V | tail -n 1)"
           if [ "$UPSTREAM" = "$OURS" ] || [ "$NEWEST" != "$UPSTREAM" ]; then
-            echo "Decision: nothing to do. Upstream ${UPSTREAM} is already published here."
+            # Equal version numbers are not enough. A release can lose an asset,
+            # and a target added later leaves older releases short of one. Say so
+            # rather than reporting a healthy day.
+            MISSING="$(gh release view "$(tag_for "$OURS")" --json assets \
+              | missing_assets "$OURS" | tr '\n' ' ')"
+            if [ -n "${MISSING// /}" ]; then
+              echo "::error::The newest release here, ${TAG_PREFIX}${OURS}, is missing assets: ${MISSING}"
+              echo "::error::Run the build workflow by hand with force to rebuild it. That changes the published checksums."
+              exit 1
+            fi
+
+            echo "Decision: nothing to do. Upstream ${UPSTREAM} is already published here with every asset."
             echo "needs_build=false" >> "$GITHUB_OUTPUT"
-            SUMMARY="Nothing to do. Upstream is \`${UPSTREAM}\`, published here is \`${OURS:-none}\`."
+            SUMMARY="Nothing to do. Upstream is \`${UPSTREAM}\`, published here is \`${OURS:-none}\`, with every asset."
           else
             echo "Decision: build ${UPSTREAM}."
             echo "needs_build=true" >> "$GITHUB_OUTPUT"

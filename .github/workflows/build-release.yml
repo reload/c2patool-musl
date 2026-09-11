@@ -111,11 +111,7 @@ jobs:
           V="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
 
-          EXPECTED="SHA256SUMS"
-          while read -r T; do
-            EXPECTED="${EXPECTED} $(archive_for "$V" "$T") $(latest_archive_for "$T")"
-          done < <(supported_targets)
-
+          MISSING=""
           if ! RELEASE="$(gh release view "$TAG" --json isDraft,assets 2>/dev/null)"; then
             STATE=absent
           elif [ "$(jq -r .isDraft <<<"$RELEASE")" = "true" ]; then
@@ -124,15 +120,12 @@ jobs:
             # replace.
             STATE=draft
           else
-            MISSING=""
-            for A in $EXPECTED; do
-              jq -e --arg a "$A" 'any(.assets[]; .name == $a)' <<<"$RELEASE" >/dev/null || MISSING="${MISSING} ${A}"
-            done
-            if [ -z "$MISSING" ]; then
+            MISSING="$(printf '%s' "$RELEASE" | missing_assets "$V" | tr '\n' ' ')"
+            if [ -z "${MISSING// /}" ]; then
               STATE=complete
             else
               STATE=incomplete
-              echo "Missing assets:${MISSING}"
+              echo "Missing assets: ${MISSING}"
             fi
           fi
 
@@ -155,7 +148,7 @@ jobs:
               else
                 # Rebuilding would replace assets that consumers already pinned
                 # a checksum for, so a person decides, not the schedule.
-                echo "::error::${TAG} is published but is missing assets:${MISSING}"
+                echo "::error::${TAG} is published but is missing assets: ${MISSING}"
                 echo "::error::Run this workflow by hand with force set to rebuild and replace it. That changes the published checksums."
                 exit 1
               fi
@@ -213,8 +206,12 @@ jobs:
           set -uo pipefail
           V="${{ needs.prepare.outputs.version }}"
           mkdir -p dist
-          ./scripts/build.sh "$V" dist
-          STATUS=$?
+
+          # GitHub runs this step as `bash -e`, and `set -uo pipefail` does not
+          # turn that off. Reading $? on the next line is therefore never
+          # reached. The status has to be captured in the command itself.
+          STATUS=0
+          ./scripts/build.sh "$V" dist || STATUS=$?
 
           if [ "$STATUS" -eq 0 ]; then
             exit 0
@@ -356,6 +353,24 @@ jobs:
           fi
 
           echo "Published ${TAG}."
+
+      - name: Read the release back and check it
+        if: steps.deferred.outputs.deferred != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.prepare.outputs.tag }}"
+
+          # An upload replaces assets one at a time. If one fails, the release
+          # can hold archives from one build and checksums from another. The
+          # only way to know is to download what is now published.
+          VERIFY="$(mktemp -d)"
+          gh release download "$TAG" --pattern '*.tar.gz' --dir "$VERIFY"
+          cp dist/SHA256SUMS "$VERIFY/"
+          ( cd "$VERIFY" && sha256sum -c SHA256SUMS )
+          echo "Every published asset matches the checksums in this release."
 
       - name: Write the run summary
         if: always()
