@@ -62,7 +62,7 @@ Pin a version in production. The sha256 makes the download verifiable.
 
 ```sh
 VERSION=0.27.22
-SHA256=SHA256_PLACEHOLDER
+SHA256=a91386dfaf8c00a9f211af5732b0c1ae6709e3b863a4fadc8538388dd332ae6f
 URL=https://github.com/reload/c2patool-musl/releases/download/c2patool-v${VERSION}/c2patool-v${VERSION}-x86_64-unknown-linux-musl.tar.gz
 
 curl -fsSL -o /tmp/c2patool.tar.gz "$URL"
@@ -87,7 +87,7 @@ rm -f /tmp/c2patool.tar.gz
 ```yaml
 vars:
   C2PATOOL_VERSION: 0.27.22
-  C2PATOOL_SHA256: SHA256_PLACEHOLDER
+  C2PATOOL_SHA256: a91386dfaf8c00a9f211af5732b0c1ae6709e3b863a4fadc8538388dd332ae6f
 
 tasks:
   c2patool:install:
@@ -110,7 +110,7 @@ hooks:
     build: |
         set -e
         C2PATOOL_VERSION=0.27.22
-        C2PATOOL_SHA256=SHA256_PLACEHOLDER
+        C2PATOOL_SHA256=a91386dfaf8c00a9f211af5732b0c1ae6709e3b863a4fadc8538388dd332ae6f
         mkdir -p "$PLATFORM_APP_DIR/bin"
         curl -fsSL -o /tmp/c2patool.tar.gz \
             "https://github.com/reload/c2patool-musl/releases/download/c2patool-v${C2PATOOL_VERSION}/c2patool-v${C2PATOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz"
@@ -141,7 +141,7 @@ The same sha256 is also printed in the release notes. The archive contains a
 ## Build it again by hand
 
 This one command produces the same binary that the workflow produces. It takes
-about eight minutes:
+about eight to ten minutes:
 
 ```sh
 docker run --rm -v "$PWD:/work" -w /work rust:1.98.1-alpine3.24 sh -c '
