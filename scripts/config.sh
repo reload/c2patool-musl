@@ -1,7 +1,7 @@
 # shellcheck shell=sh
-# shellcheck disable=SC2034  # these constants are read by the scripts that source this file
-# Shared constants and helpers for the build scripts.
-# Sourced, never executed. Every value can be overridden from the environment.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+# Shared constants and helpers. Sourced, never executed.
+# Every value can be overridden from the environment.
 
 UPSTREAM_REPO="${UPSTREAM_REPO:-contentauth/c2pa-rs}"
 UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}"
@@ -9,15 +9,11 @@ UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}"
 # Upstream tags a c2patool release as c2patool-vX.Y.Z in the c2pa-rs repository.
 TAG_PREFIX="c2patool-v"
 
-# The build image is pinned to an exact compiler and an exact Alpine version.
-# The image must be musl hosted, so that a plain cargo install produces a static
-# binary with no cross compilation setup.
+# Must be musl hosted: a plain cargo install then produces a static binary.
 RUST_IMAGE="${RUST_IMAGE:-rust:1.98.1-alpine3.24}"
 
-# The targets this repository publishes, and the runner that builds each one.
-# The runner must be of the target's architecture, so the build image is always
-# native. Cross compilation is avoided because the dependency tree compiles its
-# own OpenSSL, and emulation is avoided because it makes the build far slower.
+# Each runner must match its target's architecture. Cross compilation fights the
+# OpenSSL the dependency tree builds, and emulation is about six times slower.
 TARGET_RUNNERS="${TARGET_RUNNERS:-x86_64-unknown-linux-musl=ubuntu-latest aarch64-unknown-linux-musl=ubuntu-24.04-arm}"
 
 # Prints one target per line.
@@ -27,8 +23,7 @@ supported_targets() {
     done
 }
 
-# Prints the build matrix for the workflow, so the list of targets lives here
-# and not in the workflow file as well.
+# Prints the build matrix, so the target list lives here only.
 matrix_json() {
     _first=1
     printf '{"include":['
@@ -60,8 +55,7 @@ archive_for() {
     printf '%s%s-%s.tar.gz' "$TAG_PREFIX" "$1" "$2"
 }
 
-# Prints the version independent asset name for a target. This name is what
-# makes the /releases/latest/download/ URL work.
+# The version independent name, which /releases/latest/download/ needs.
 latest_archive_for() {
     printf 'c2patool-%s.tar.gz' "$1"
 }
@@ -75,8 +69,7 @@ expected_assets() {
     done
 }
 
-# Prints the asset names that the given release is missing. Reads the output of
-# `gh release view --json assets` on standard input.
+# Reads `gh release view --json assets` on stdin, prints the missing names.
 missing_assets() {
     _release="$(cat)"
     for _a in $(expected_assets "$1"); do
@@ -86,7 +79,7 @@ missing_assets() {
     done
 }
 
-# Prints the target triple for the architecture of the machine that runs this.
+# The target triple of the machine running this.
 target_for_host_arch() {
     case "$(uname -m)" in
         x86_64|amd64) printf 'x86_64-unknown-linux-musl' ;;

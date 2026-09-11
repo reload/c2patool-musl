@@ -1,15 +1,9 @@
 #!/bin/sh
-# Builds a static musl c2patool from unmodified upstream source.
-# Runs inside the pinned rust alpine image. Writes the stripped binary and
-# build-info.json to /out.
-#
-# Exit codes:
-#   0   the binary was built
-#   75  upstream has tagged this version but crates.io does not have it yet,
-#       and the tag build failed. The caller must try again later.
-#   1   anything else
+# Builds a static musl c2patool from unmodified upstream source. Runs inside the
+# pinned rust alpine image. Writes the binary and build-info.json to /out.
 #
 # Usage: build-in-container.sh <version> <expected-target>
+# Exit 75: the tag build failed and crates.io does not have this version yet.
 
 set -eu
 
@@ -21,8 +15,7 @@ TAG="${TAG_PREFIX}${VERSION}"
 
 EXIT_NOT_ON_CRATES_IO=75
 
-# Everything under /out and /build is written by root inside this container.
-# The ownership is handed back, so that the host can read and delete the files.
+# Root writes /out and /build, so hand the ownership back to the host.
 give_files_back() {
     if [ -n "${HOST_UID:-}" ]; then
         chown -R "${HOST_UID}:${HOST_GID}" /out /build 2>/dev/null || true
@@ -36,8 +29,7 @@ apk add --no-cache build-base musl-dev perl cmake pkgconf binutils git jq >/dev/
 RUSTC_VERSION="$(rustc --version)"
 HOST_TARGET="$(rustc -vV | awk '/^host:/ {print $2}')"
 
-# The image must be musl hosted. A plain cargo install then produces a static
-# binary, with no cross compilation setup and no emulation.
+# Must be musl hosted: a plain cargo install then produces a static binary.
 case "$HOST_TARGET" in
     *-linux-musl) ;;
     *)
@@ -46,8 +38,8 @@ case "$HOST_TARGET" in
         ;;
 esac
 
-# The caller states which target it expects. A wrong runner architecture is then
-# a loud error instead of an archive with a misleading name.
+# Catches a runner of the wrong architecture, which would otherwise produce an
+# archive with a misleading name.
 if [ "$HOST_TARGET" != "$EXPECT_TARGET" ]; then
     echo "error: this container is ${HOST_TARGET}, but ${EXPECT_TARGET} was expected." >&2
     echo "The job is running on a runner of the wrong architecture." >&2
@@ -63,9 +55,8 @@ crates_io_status() {
         "https://crates.io/api/v1/crates/c2patool/${VERSION}" || printf '000'
 }
 
-# The source of record is the upstream release tag. The crate is found by
-# package name, because upstream moved it from c2patool/ to cli/ and can move it
-# again. Never build from a hard-coded path.
+# The tag is the source of record. The crate is found by package name, because
+# upstream moved it from c2patool/ to cli/ and can move it again.
 echo ">>> building from ${UPSTREAM_URL} at tag ${TAG}"
 if cargo install --locked --root /build/out --git "$UPSTREAM_URL" --tag "$TAG" c2patool; then
     BUILD_SOURCE="${UPSTREAM_URL} at tag ${TAG}"
@@ -77,8 +68,7 @@ else
     STATUS="$(crates_io_status)"
     case "$STATUS" in
         404)
-            # An upstream GitHub release can appear seconds before the crates.io
-            # publish. Nothing is wrong. The caller tries again later.
+            # A release can appear seconds before its crates.io publish.
             echo ">>> crates.io does not have c2patool ${VERSION} yet." >&2
             exit "$EXIT_NOT_ON_CRATES_IO"
             ;;
@@ -102,8 +92,7 @@ SIZE_UNSTRIPPED="$(wc -c < /build/out/bin/c2patool | tr -d ' ')"
 strip -o /out/c2patool /build/out/bin/c2patool
 SIZE_STRIPPED="$(wc -c < /out/c2patool | tr -d ' ')"
 
-# JSON, not shell. The host reads this file as data and never executes it,
-# because everything in this container ran upstream build scripts as root.
+# JSON, not shell: the host must never execute what this container wrote.
 jq -n \
     --arg version "$VERSION" \
     --arg target "$HOST_TARGET" \

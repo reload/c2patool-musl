@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Builds and packages a static musl c2patool for one upstream version and one
-# target. The target is the architecture of the machine that runs this script,
-# because the build container is always native and never emulated.
+# Builds and packages a static musl c2patool for one version. The target is the
+# architecture of this machine, because the build container is never emulated.
 #
 # Usage: scripts/build.sh <version> [outdir]
-# Example: scripts/build.sh 0.27.22 dist
 #
-# Exit code 75 means upstream has tagged this version but crates.io does not
-# have it yet. Try again later. Every other non-zero exit is a real failure.
+# Exit code 75 means crates.io does not have this version yet. Try again later.
+# Every other non-zero exit is a real failure.
 
 set -euo pipefail
 
@@ -32,8 +30,7 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$OUTDIR"
 OUTDIR="$(cd "$OUTDIR" && pwd)"
 
-# The files that upstream ships beside the binary. They are the same for every
-# target, so a caller that builds several targets fetches them once and passes
+# Same for every target, so a multi-target caller fetches them once and passes
 # the directory in.
 if [ -n "${AUX_DIR:-}" ]; then
     AUX_DIR="$(cd "$AUX_DIR" && pwd)"
@@ -65,8 +62,7 @@ if [ "$STATUS" -ne 0 ]; then
     exit "$STATUS"
 fi
 
-# The build info is read as data. It is never sourced, because every command in
-# that container ran upstream build scripts as root.
+# Read as data, never sourced: that container ran upstream build scripts as root.
 INFO="${WORK}/out/build-info.json"
 read_info() { jq -er --arg k "$1" '.[$k] | tostring' "$INFO"; }
 
@@ -80,8 +76,7 @@ if [ "$BUILT_TARGET" != "$TARGET" ]; then
     exit 1
 fi
 
-# A tag build that quietly starts always failing would otherwise go unnoticed,
-# because the crates.io fallback keeps producing a release.
+# The fallback keeps producing releases, so a rotting tag build must be loud.
 if [ "$BUILD_SOURCE_KIND" = "crates-io" ]; then
     echo "::warning::The tag build failed and ${TAG} was built from crates.io instead. Check whether the tag build is broken."
 fi
@@ -109,12 +104,11 @@ Target:           ${TARGET}
 Built by:         ${REPO_URL}
 INFO
 
-# The archive is written with sorted names and no timestamps, so that two builds
-# of the same version produce the same bytes.
+# Sorted names and no timestamps, so two builds give the same bytes.
 tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner \
     -C "${WORK}/stage" -cf - c2patool | gzip -9n > "${OUTDIR}/${ARCHIVE}"
 
-# The host adds what only the host knows. The container never writes this file.
+# The host adds what only the host knows.
 jq --arg archive "$ARCHIVE" \
    --arg file_output "$FILE_OUTPUT" \
    --arg rust_image "$RUST_IMAGE" \

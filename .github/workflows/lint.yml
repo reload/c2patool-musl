@@ -1,8 +1,6 @@
-# Checks the workflows and the scripts on every push.
-#
-# The workflows and the scripts are the product of this repository, so a shell
-# mistake in them is a real defect. This job finds one in seconds, instead of
-# after a ten minute build.
+# The workflows and the scripts are this repository's product, so a shell
+# mistake in them is a real defect. This finds one in seconds, not after a ten
+# minute build.
 #
 # Permissions: contents: read.
 
@@ -28,8 +26,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Both linters run from a pinned image, so this repository depends on no
-      # third party GitHub action.
+      # Pinned images, so no third party GitHub action is trusted.
       - name: Check the workflows
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
 

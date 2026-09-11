@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# Fetches every file that upstream ships inside a c2patool release archive,
-# except the binary. The release archive of this repository keeps the same
-# layout, so a command that unpacks the upstream archive works here without a
-# change. The sample files are also what the smoke test runs against.
-#
-# The files are the same for every target, so this runs once per version.
+# Fetches what upstream ships beside the binary, so our archive keeps upstream's
+# layout. The sample files are also what the smoke test runs against.
+# They are the same for every target, so this runs once per version.
 #
 # Usage: scripts/fetch-aux.sh <version> <outdir>
 
@@ -32,14 +29,12 @@ curl_gh() {
     fi
 }
 
-# A function called from an `if` runs with errexit turned off, so every step
-# below states its own failure. Each route builds a complete directory of its
-# own and only that directory is published, so a half finished route never
-# leaves files behind for the next one.
+# A function called from `if` runs with errexit off, so every step below states
+# its own failure. Each route stages its own directory and publishes it only
+# once the route finishes.
 
-# Route 1: the upstream release archive. This gives the exact layout that
-# upstream ships. The asset name is read from the API, because upstream changed
-# the naming convention once. Release 0.10.2 used a doubled c2patool- prefix.
+# Route 1: upstream's release archive, which gives the exact layout. The asset
+# name comes from the API, because upstream changed the convention once.
 from_release_archive() {
     stage="${WORK}/release-archive"
     rm -rf "$stage" || return 1
@@ -66,9 +61,8 @@ from_release_archive() {
     RESULT="${stage}/c2patool"
 }
 
-# Route 2: the source tag. Used when upstream stops shipping a Linux archive.
-# The crate is found by package name, never by a hard-coded path, because
-# upstream moved it from c2patool/ to cli/ and can move it again.
+# Route 2: the source tag, for when upstream stops shipping a Linux archive.
+# The crate is found by package name, because upstream moved it once already.
 from_source_tag() {
     stage="${WORK}/source-tag"
     rm -rf "$stage" || return 1
@@ -109,8 +103,7 @@ fi
 
 cp -a "${RESULT}/." "$OUTDIR/"
 
-# The smoke test cannot run without these two files, so fail here rather than
-# after a ten minute compile.
+# Fail here rather than after a ten minute compile.
 for f in sample/C.jpg sample/image.jpg; do
     if [ ! -f "${OUTDIR}/${f}" ]; then
         echo "error: ${f} is missing. The smoke test needs it." >&2

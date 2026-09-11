@@ -1,14 +1,10 @@
-# Builds one upstream c2patool version for every supported musl target and
-# publishes it as a release in this repository.
+# Builds one upstream c2patool version for every musl target and publishes it.
 #
-# The build job holds no write permission and runs with the checkout credentials
-# removed, because it compiles upstream source and runs upstream build scripts.
-# Only the publish job can write, and it never executes anything the build
-# produced.
+# Only the publish job can write. The build job compiles upstream source, so it
+# runs read-only and publish never executes what it produced.
 #
-# Permissions: the prepare and build jobs need contents: read. The publish job
-# needs contents: write to create the release. The failure job needs
-# issues: write.
+# Permissions: contents: read to prepare and build, contents: write to publish,
+# issues: write to report a failure.
 
 name: Build and release
 
@@ -63,8 +59,8 @@ jobs:
       - name: Read the version input
         id: version
         env:
-          # The input is passed through the environment, never interpolated into
-          # the script. A workflow input must not become shell code.
+          # Through the environment, never interpolated: an input must not
+          # become shell code.
           RAW_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
@@ -115,9 +111,8 @@ jobs:
           if ! RELEASE="$(gh release view "$TAG" --json isDraft,assets 2>/dev/null)"; then
             STATE=absent
           elif [ "$(jq -r .isDraft <<<"$RELEASE")" = "true" ]; then
-            # A run that died between creating the release and uploading its
-            # assets leaves a draft. A draft has no consumers, so it is safe to
-            # replace.
+            # A run that died mid-upload leaves a draft. A draft has no
+            # consumers, so replacing it is safe.
             STATE=draft
           else
             MISSING="$(printf '%s' "$RELEASE" | missing_assets "$V" | tr '\n' ' ')"
@@ -146,8 +141,8 @@ jobs:
               if [ "${{ inputs.force }}" = "true" ]; then
                 echo "skip=false" >> "$GITHUB_OUTPUT"
               else
-                # Rebuilding would replace assets that consumers already pinned
-                # a checksum for, so a person decides, not the schedule.
+                # Rebuilding replaces checksums consumers pinned, so a person
+                # decides, not the schedule.
                 echo "::error::${TAG} is published but is missing assets: ${MISSING}"
                 echo "::error::Run this workflow by hand with force set to rebuild and replace it. That changes the published checksums."
                 exit 1
@@ -187,8 +182,7 @@ jobs:
       - name: Check out this repository
         uses: actions/checkout@v7
         with:
-          # This job compiles upstream source and runs upstream build scripts.
-          # It must not carry a credential.
+          # This job runs upstream build scripts. It must carry no credential.
           persist-credentials: false
 
       - name: Take the files that upstream ships beside the binary
@@ -207,9 +201,8 @@ jobs:
           V="${{ needs.prepare.outputs.version }}"
           mkdir -p dist
 
-          # GitHub runs this step as `bash -e`, and `set -uo pipefail` does not
-          # turn that off. Reading $? on the next line is therefore never
-          # reached. The status has to be captured in the command itself.
+          # GitHub runs this step as `bash -e`, which `set -uo pipefail` does
+          # not turn off, so $? on the next line is never reached.
           STATUS=0
           ./scripts/build.sh "$V" dist || STATUS=$?
 
@@ -217,16 +210,14 @@ jobs:
             exit 0
           fi
 
-          # Exit code 75 means the tag build failed and crates.io does not have
-          # this version yet. Every other code is a real failure.
+          # 75 means crates.io lacks this version. Anything else is real.
           if [ "$STATUS" -ne 75 ]; then
             exit "$STATUS"
           fi
 
           AGE="${{ needs.prepare.outputs.age_hours }}"
           if [ "$AGE" -ge 24 ]; then
-            # A crates.io publish takes minutes. A day later, something is wrong
-            # and it must not keep deferring in silence.
+            # A publish takes minutes. A day later, deferring hides a fault.
             echo "::error::${V} was released upstream ${AGE} hours ago, the tag build fails, and crates.io still does not have it."
             exit 1
           fi
@@ -288,8 +279,7 @@ jobs:
           . ./scripts/config.sh
           V="${{ needs.prepare.outputs.version }}"
 
-          # Every target must have produced an archive. A partial release would
-          # be worse than none.
+          # A partial release would be worse than none.
           while read -r T; do
             A="$(archive_for "$V" "$T")"
             if [ ! -f "dist/${A}" ]; then
@@ -321,8 +311,7 @@ jobs:
             ASSETS+=("dist/$(archive_for "$V" "$T")" "dist/$(latest_archive_for "$T")")
           done < <(supported_targets)
 
-          # A hand-built older version must not move the latest release
-          # backwards, because /releases/latest/download/ points at it.
+          # An older version must not move /releases/latest/download/ back.
           HIGHEST="$(gh release list --limit 200 --json tagName,isDraft \
             --jq '.[] | select(.isDraft == false) | .tagName' \
             | sed "s/^${TAG_PREFIX}//" | sort -V | tail -n 1)"
@@ -346,8 +335,7 @@ jobs:
               --latest="$LATEST" \
               "${ASSETS[@]}"
           else
-            # The release already exists. Its assets are replaced in place
-            # rather than deleted, so a download never disappears.
+            # Replaced in place, so a download never disappears.
             gh release upload "$TAG" --clobber "${ASSETS[@]}"
             gh release edit "$TAG" --notes-file dist/release-notes.md --latest="$LATEST"
           fi
@@ -363,9 +351,8 @@ jobs:
           set -euo pipefail
           TAG="${{ needs.prepare.outputs.tag }}"
 
-          # An upload replaces assets one at a time. If one fails, the release
-          # can hold archives from one build and checksums from another. The
-          # only way to know is to download what is now published.
+          # Uploads happen one at a time, so a failure can leave archives from
+          # one build beside checksums from another.
           VERIFY="$(mktemp -d)"
           gh release download "$TAG" --pattern '*.tar.gz' --dir "$VERIFY"
           cp dist/SHA256SUMS "$VERIFY/"

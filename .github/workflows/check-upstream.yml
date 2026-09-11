@@ -1,10 +1,8 @@
-# Looks for a newer upstream c2patool release once a day and builds it.
-# Only the newest upstream release is built. To build any other version, run the
-# "Build and release" workflow by hand.
+# Builds the newest upstream c2patool release once a day. For any other
+# version, run "Build and release" by hand.
 #
-# Permissions: the check job needs contents: read. The build job needs
-# contents: write and issues: write, because a called workflow runs with the
-# permissions of the job that calls it.
+# Permissions: contents: read to check. The build job needs contents: write and
+# issues: write, because a called workflow runs with its caller's permissions.
 
 name: Check upstream
 
@@ -40,10 +38,8 @@ jobs:
           set -euo pipefail
           . ./scripts/config.sh
 
-          # Upstream tags a c2patool release as c2patool-vX.Y.Z in the c2pa-rs
-          # repository. The releases for the other crates are ignored.
-          # gh api --jq takes one argument and cannot pass a variable, so the
-          # filter runs in jq itself.
+          # c2pa-rs also releases other crates, so filter by tag prefix.
+          # gh api --jq takes one argument, so the filter runs in jq itself.
           UPSTREAM="$(gh api "repos/${UPSTREAM_REPO}/releases?per_page=100" \
             | jq -r --arg p "$TAG_PREFIX" '.[] | select(.draft == false) | select(.prerelease == false)
                   | select(.tag_name | startswith($p)) | .tag_name' \
@@ -63,9 +59,8 @@ jobs:
 
           NEWEST="$(printf '%s\n%s\n' "${OURS:-0.0.0}" "$UPSTREAM" | sort -V | tail -n 1)"
           if [ "$UPSTREAM" = "$OURS" ] || [ "$NEWEST" != "$UPSTREAM" ]; then
-            # Equal version numbers are not enough. A release can lose an asset,
-            # and a target added later leaves older releases short of one. Say so
-            # rather than reporting a healthy day.
+            # Equal versions are not enough: a release can lose an asset, and
+            # a target added later leaves older releases short of one.
             MISSING="$(gh release view "$(tag_for "$OURS")" --json assets \
               | missing_assets "$OURS" | tr '\n' ' ')"
             if [ -n "${MISSING// /}" ]; then
@@ -104,8 +99,7 @@ jobs:
   report-failure:
     name: Report the failure
     needs: check
-    # Only a failure of the check job is reported here. A failed build reports
-    # itself, so one failure never opens two issues.
+    # A failed build reports itself, so never report it twice.
     if: failure() && needs.check.result == 'failure' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
