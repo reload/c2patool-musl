@@ -111,6 +111,14 @@ FILE_OUTPUT='$(printf "%s" "$FILE_OUTPUT" | tr -d "'")'
 RUST_IMAGE='${RUST_IMAGE}'
 INFO
 
+# The upstream release profile already strips the binary in some versions.
+# Reporting two identical numbers reads like a mistake, so say what happened.
+if [ "$SIZE_STRIPPED" -lt "$SIZE_UNSTRIPPED" ]; then
+    SIZE_LINE="${SIZE_STRIPPED} bytes, down from ${SIZE_UNSTRIPPED} bytes before stripping"
+else
+    SIZE_LINE="${SIZE_STRIPPED} bytes. The upstream release profile already strips the binary"
+fi
+
 cat > "${OUTDIR}/release-notes.md" <<INFO
 A static \`c2patool\` ${VERSION} for \`${TARGET}\`.
 
@@ -127,7 +135,7 @@ source, compiled for a target that upstream does not publish. See the
 | Build image | \`${RUST_IMAGE}\` |
 | Target triple | \`${TARGET}\` |
 | Binary type | \`${FILE_OUTPUT}\` |
-| Size | ${SIZE_STRIPPED} bytes stripped, ${SIZE_UNSTRIPPED} bytes unstripped |
+| Size | ${SIZE_LINE} |
 | sha256 | \`${SHA256}\` |
 
 The binary was tested in \`alpine:3.24\` and in \`debian:bookworm-slim\` before
