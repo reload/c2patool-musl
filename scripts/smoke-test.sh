@@ -8,9 +8,10 @@ set -euo pipefail
 
 ARCHIVE="${1:?usage: smoke-test.sh <archive.tar.gz> <expected-version>}"
 VERSION="${2:?usage: smoke-test.sh <archive.tar.gz> <expected-version>}"
-IMAGES="${IMAGES:-alpine:3.24 debian:bookworm-slim}"
-
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/config.sh
+. "${REPO_ROOT}/scripts/config.sh"
+IMAGES="${IMAGES:-$SMOKE_IMAGES}"
 ARCHIVE="$(cd "$(dirname "$ARCHIVE")" && pwd)/$(basename "$ARCHIVE")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

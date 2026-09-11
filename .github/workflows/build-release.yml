@@ -1,8 +1,14 @@
-# Builds one upstream c2patool version for x86_64-unknown-linux-musl and
+# Builds one upstream c2patool version for every supported musl target and
 # publishes it as a release in this repository.
 #
-# Permissions: contents: write, to create the release. issues: write, to report
-# a failure. Nothing else.
+# The build job holds no write permission and runs with the checkout credentials
+# removed, because it compiles upstream source and runs upstream build scripts.
+# Only the publish job can write, and it never executes anything the build
+# produced.
+#
+# Permissions: the prepare and build jobs need contents: read. The publish job
+# needs contents: write to create the release. The failure job needs
+# issues: write.
 
 name: Build and release
 
@@ -14,7 +20,7 @@ on:
         required: true
         type: string
       force:
-        description: "Publish again, even when the release already exists"
+        description: "Build and upload again, even when the release is complete. This changes the checksums of a published version."
         required: false
         default: false
         type: boolean
@@ -35,122 +41,294 @@ concurrency:
   group: publish-release
   cancel-in-progress: false
 
-env:
-  UPSTREAM_REPO: contentauth/c2pa-rs
-  RUST_IMAGE: rust:1.98.1-alpine3.24
-  TARGET: x86_64-unknown-linux-musl
-
 jobs:
+  prepare:
+    name: Decide what to build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      matrix: ${{ steps.version.outputs.matrix }}
+      skip: ${{ steps.release.outputs.skip }}
+      release_state: ${{ steps.release.outputs.state }}
+      age_hours: ${{ steps.upstream.outputs.age_hours }}
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Read the version input
+        id: version
+        env:
+          # The input is passed through the environment, never interpolated into
+          # the script. A workflow input must not become shell code.
+          RAW_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          . ./scripts/config.sh
+          V="$(normalize_version "$RAW_VERSION")"
+          if ! printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'${RAW_VERSION}' is not a version number such as 0.27.22."
+            exit 1
+          fi
+          {
+            echo "version=${V}"
+            echo "tag=$(tag_for "$V")"
+            echo "matrix=$(matrix_json)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version ${V}, targets:"
+          supported_targets
+
+      - name: Make sure that the upstream release exists
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . ./scripts/config.sh
+          TAG="${{ steps.version.outputs.tag }}"
+
+          if ! PUBLISHED="$(gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG}" --jq .published_at 2>/dev/null)"; then
+            echo "::error::${UPSTREAM_REPO} has no release tagged ${TAG}."
+            exit 1
+          fi
+
+          AGE=$(( ( $(date -u +%s) - $(date -u -d "$PUBLISHED" +%s) ) / 3600 ))
+          echo "age_hours=${AGE}" >> "$GITHUB_OUTPUT"
+          echo "Upstream released ${TAG} at ${PUBLISHED}, ${AGE} hours ago."
+
+      - name: Decide whether this version still needs a release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          . ./scripts/config.sh
+          V="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          EXPECTED="SHA256SUMS"
+          while read -r T; do
+            EXPECTED="${EXPECTED} $(archive_for "$V" "$T") $(latest_archive_for "$T")"
+          done < <(supported_targets)
+
+          if ! RELEASE="$(gh release view "$TAG" --json isDraft,assets 2>/dev/null)"; then
+            STATE=absent
+          elif [ "$(jq -r .isDraft <<<"$RELEASE")" = "true" ]; then
+            # A run that died between creating the release and uploading its
+            # assets leaves a draft. A draft has no consumers, so it is safe to
+            # replace.
+            STATE=draft
+          else
+            MISSING=""
+            for A in $EXPECTED; do
+              jq -e --arg a "$A" 'any(.assets[]; .name == $a)' <<<"$RELEASE" >/dev/null || MISSING="${MISSING} ${A}"
+            done
+            if [ -z "$MISSING" ]; then
+              STATE=complete
+            else
+              STATE=incomplete
+              echo "Missing assets:${MISSING}"
+            fi
+          fi
+
+          echo "Release ${TAG} is ${STATE}."
+          echo "state=${STATE}" >> "$GITHUB_OUTPUT"
+
+          case "$STATE" in
+            complete)
+              if [ "${{ inputs.force }}" = "true" ]; then
+                echo "The force input is set, so it is built again."
+                echo "skip=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "Nothing to do."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            incomplete)
+              if [ "${{ inputs.force }}" = "true" ]; then
+                echo "skip=false" >> "$GITHUB_OUTPUT"
+              else
+                # Rebuilding would replace assets that consumers already pinned
+                # a checksum for, so a person decides, not the schedule.
+                echo "::error::${TAG} is published but is missing assets:${MISSING}"
+                echo "::error::Run this workflow by hand with force set to rebuild and replace it. That changes the published checksums."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Collect the files that upstream ships beside the binary
+        if: steps.release.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./scripts/fetch-aux.sh "${{ steps.version.outputs.version }}" aux
+
+      - name: Keep them for the build jobs
+        if: steps.release.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aux
+          path: aux/
+          include-hidden-files: true
+          retention-days: 1
+
   build:
-    name: Build, test and publish
+    name: Build ${{ matrix.target }}
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          # This job compiles upstream source and runs upstream build scripts.
+          # It must not carry a credential.
+          persist-credentials: false
+
+      - name: Take the files that upstream ships beside the binary
+        uses: actions/download-artifact@v4
+        with:
+          name: aux
+          path: aux
+
+      - name: Build the static musl binary
+        id: build
+        env:
+          TARGET: ${{ matrix.target }}
+          AUX_DIR: aux
+        run: |
+          set -uo pipefail
+          V="${{ needs.prepare.outputs.version }}"
+          mkdir -p dist
+          ./scripts/build.sh "$V" dist
+          STATUS=$?
+
+          if [ "$STATUS" -eq 0 ]; then
+            exit 0
+          fi
+
+          # Exit code 75 means the tag build failed and crates.io does not have
+          # this version yet. Every other code is a real failure.
+          if [ "$STATUS" -ne 75 ]; then
+            exit "$STATUS"
+          fi
+
+          AGE="${{ needs.prepare.outputs.age_hours }}"
+          if [ "$AGE" -ge 24 ]; then
+            # A crates.io publish takes minutes. A day later, something is wrong
+            # and it must not keep deferring in silence.
+            echo "::error::${V} was released upstream ${AGE} hours ago, the tag build fails, and crates.io still does not have it."
+            exit 1
+          fi
+
+          echo "::warning::${V} is not on crates.io yet. It is left for the next scheduled run."
+          echo "deferred" > dist/DEFERRED
+          rm -f dist/*.tar.gz dist/*.json
+
+      - name: Test the binary in every target image
+        if: hashFiles('dist/DEFERRED') == ''
+        run: |
+          set -euo pipefail
+          . ./scripts/config.sh
+          V="${{ needs.prepare.outputs.version }}"
+          ./scripts/smoke-test.sh "dist/$(archive_for "$V" "${{ matrix.target }}")" "$V"
+
+      - name: Hand the result to the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.target }}
+          path: dist/
+          retention-days: 1
+
+  publish:
+    name: Publish the release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Check out this repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Read the version input
-        id: version
-        env:
-          # The input is passed through the environment, never interpolated
-          # into the script. A workflow input must not become shell code.
-          RAW_VERSION: ${{ inputs.version }}
+      - name: Collect every target
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          path: dist
+          merge-multiple: true
+
+      - name: Stop here when the version was deferred
+        id: deferred
         run: |
           set -euo pipefail
-          RAW="$RAW_VERSION"
-          # Accepts 0.27.22, v0.27.22 and c2patool-v0.27.22.
-          V="${RAW#c2patool-}"
-          V="${V#v}"
-          if ! printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::'${RAW}' is not a version number such as 0.27.22."
-            exit 1
-          fi
-          echo "version=${V}" >> "$GITHUB_OUTPUT"
-          echo "tag=c2patool-v${V}" >> "$GITHUB_OUTPUT"
-          echo "Building c2patool ${V}"
-
-      - name: Skip a version that is already published
-        id: published
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.version.outputs.tag }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            if [ "${{ inputs.force }}" = "true" ]; then
-              echo "${TAG} exists. The force input is set, so it is deleted and built again."
-              gh release delete "$TAG" --yes --cleanup-tag
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "${TAG} is already published. Nothing to do."
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-            fi
+          if [ -f dist/DEFERRED ]; then
+            echo "This version is not on crates.io yet. The next scheduled run takes it."
+            echo "deferred=true" >> "$GITHUB_OUTPUT"
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Make sure that the upstream release exists
-        if: steps.published.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.version.outputs.tag }}"
-          if ! gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::error::${UPSTREAM_REPO} has no release tagged ${TAG}."
-            exit 1
-          fi
-          echo "Upstream release ${TAG} found."
-
-      - name: Build the static musl binary
-        id: build
-        if: steps.published.outputs.skip != 'true'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          V="${{ steps.version.outputs.version }}"
-          if ./scripts/build.sh "$V" dist; then
             echo "deferred=false" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
 
-          # The build failed. An upstream GitHub release can appear a few
-          # seconds before the crates.io publish. If crates.io does not have
-          # this version yet, the next scheduled run takes it. Do not fail.
-          echo "The build failed. Checking whether crates.io has ${V} yet."
-          if curl -fsS -H "User-Agent: reload/c2patool-musl" \
-              "https://crates.io/api/v1/crates/c2patool/${V}" >/dev/null 2>&1; then
-            echo "::error::The build failed and crates.io has ${V}. This is a real failure."
-            exit 1
-          fi
-
-          echo "::warning::crates.io does not have c2patool ${V} yet. \
-          This version is left for the next scheduled run."
-          echo "deferred=true" >> "$GITHUB_OUTPUT"
-
-      - name: Test the binary in alpine and in debian
-        if: steps.published.outputs.skip != 'true' && steps.build.outputs.deferred != 'true'
+      - name: Assemble the release assets
+        if: steps.deferred.outputs.deferred != 'true'
         run: |
           set -euo pipefail
-          V="${{ steps.version.outputs.version }}"
-          ./scripts/smoke-test.sh "dist/c2patool-v${V}-${TARGET}.tar.gz" "$V"
+          . ./scripts/config.sh
+          V="${{ needs.prepare.outputs.version }}"
 
-      - name: Publish the release
-        if: steps.published.outputs.skip != 'true' && steps.build.outputs.deferred != 'true'
+          # Every target must have produced an archive. A partial release would
+          # be worse than none.
+          while read -r T; do
+            A="$(archive_for "$V" "$T")"
+            if [ ! -f "dist/${A}" ]; then
+              echo "::error::${A} is missing. The build for ${T} produced nothing."
+              exit 1
+            fi
+            cp "dist/${A}" "dist/$(latest_archive_for "$T")"
+          done < <(supported_targets)
+
+          ( cd dist && sha256sum c2patool-*.tar.gz > SHA256SUMS )
+          cat dist/SHA256SUMS
+
+          ./scripts/release-notes.sh "$V" dist > dist/release-notes.md
+
+      - name: Create or update the release
+        if: steps.deferred.outputs.deferred != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          V="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
+          . ./scripts/config.sh
+          V="${{ needs.prepare.outputs.version }}"
+          TAG="${{ needs.prepare.outputs.tag }}"
+          STATE="${{ needs.prepare.outputs.release_state }}"
+
+          ASSETS=(dist/SHA256SUMS)
+          while read -r T; do
+            ASSETS+=("dist/$(archive_for "$V" "$T")" "dist/$(latest_archive_for "$T")")
+          done < <(supported_targets)
 
           # A hand-built older version must not move the latest release
           # backwards, because /releases/latest/download/ points at it.
           HIGHEST="$(gh release list --limit 200 --json tagName,isDraft \
             --jq '.[] | select(.isDraft == false) | .tagName' \
-            | sed 's/^c2patool-v//' | sort -V | tail -n 1)"
+            | sed "s/^${TAG_PREFIX}//" | sort -V | tail -n 1)"
           if [ -z "$HIGHEST" ] || [ "$(printf '%s\n%s\n' "$HIGHEST" "$V" | sort -V | tail -n 1)" = "$V" ]; then
             LATEST=true
           else
@@ -158,69 +336,58 @@ jobs:
           fi
           echo "Highest published version: ${HIGHEST:-none}. Mark as latest: ${LATEST}."
 
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes-file dist/release-notes.md \
-            --latest="$LATEST" \
-            "dist/c2patool-v${V}-${TARGET}.tar.gz" \
-            "dist/c2patool-${TARGET}.tar.gz" \
-            dist/SHA256SUMS
+          if [ "$STATE" = "draft" ]; then
+            echo "Replacing the leftover draft."
+            gh release delete "$TAG" --yes --cleanup-tag
+            STATE=absent
+          fi
+
+          if [ "$STATE" = "absent" ]; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file dist/release-notes.md \
+              --latest="$LATEST" \
+              "${ASSETS[@]}"
+          else
+            # The release already exists. Its assets are replaced in place
+            # rather than deleted, so a download never disappears.
+            gh release upload "$TAG" --clobber "${ASSETS[@]}"
+            gh release edit "$TAG" --notes-file dist/release-notes.md --latest="$LATEST"
+          fi
 
           echo "Published ${TAG}."
 
       - name: Write the run summary
-        if: always() && steps.published.outputs.skip != 'true'
+        if: always()
         run: |
           set -uo pipefail
-          V="${{ steps.version.outputs.version }}"
           {
-            echo "## c2patool ${V}"
-            if [ "${{ steps.build.outputs.deferred }}" = "true" ]; then
+            echo "## c2patool ${{ needs.prepare.outputs.version }}"
+            echo ""
+            if [ -f dist/DEFERRED ]; then
               echo "Deferred. crates.io does not have this version yet."
-            elif [ -f dist/build-info.env ]; then
-              echo '```'
-              cat dist/build-info.env
-              echo '```'
+            elif [ -f dist/release-notes.md ]; then
+              cat dist/release-notes.md
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   report-failure:
     name: Report the failure
-    needs: build
-    if: failure()
+    needs: [prepare, build, publish]
+    if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       issues: write
+    concurrency:
+      group: report-failure
+      cancel-in-progress: false
     steps:
-      - name: Open the failure issue, or comment on the open one
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RAW_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          BODY="The build of c2patool \`${RAW_VERSION}\` failed on $(date -u +'%Y-%m-%d %H:%M UTC').
-
-          Run: ${RUN_URL}
-
-          This issue stays open and collects a comment for every later failure.
-          Close it after the cause is fixed. The next failure opens a new one."
-
-          # The label may not exist yet in a new repository.
-          gh label create build-failure --color B60205 \
-            --description "An automated build or upstream check failed" 2>/dev/null || true
-
-          NUMBER="$(gh issue list --state open --label build-failure --limit 1 \
-            --json number --jq '.[0].number // empty')"
-
-          if [ -n "$NUMBER" ]; then
-            echo "Commenting on the open issue #${NUMBER}."
-            gh issue comment "$NUMBER" --body "$BODY"
-          else
-            echo "Opening a new issue."
-            gh issue create \
-              --title "Automated build failed" \
-              --label build-failure \
-              --body "$BODY"
-          fi
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/report-failure
+        with:
+          title: Automated build failed
+          what-failed: The build of c2patool `${{ inputs.version }}` failed
+          token: ${{ github.token }}

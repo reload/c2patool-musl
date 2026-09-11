@@ -12,10 +12,11 @@ License:          MIT OR Apache-2.0
 This repository contains no upstream source code. Every release is compiled
 from the upstream release tag named in that release, or from the matching
 crates.io package. The source is never patched, vendored or modified. The only
-change is the target triple, x86_64-unknown-linux-musl.
+change is the target triple. The published targets are
+x86_64-unknown-linux-musl and aarch64-unknown-linux-musl.
 
 Every release states the upstream tag it was built from, the compiler version
-and the sha256 of the archive. Each release archive also contains a
+and the sha256 of every archive. Each release archive also contains a
 MUSL-BUILD.txt file that repeats that information.
 
 Each release archive keeps the files that upstream shipped in the same release,

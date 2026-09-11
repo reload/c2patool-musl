@@ -1,78 +1,95 @@
 #!/usr/bin/env bash
-# Builds and packages a static musl c2patool for one upstream version.
-# Produces the release assets in the output directory.
+# Builds and packages a static musl c2patool for one upstream version and one
+# target. The target is the architecture of the machine that runs this script,
+# because the build container is always native and never emulated.
 #
 # Usage: scripts/build.sh <version> [outdir]
 # Example: scripts/build.sh 0.27.22 dist
+#
+# Exit code 75 means upstream has tagged this version but crates.io does not
+# have it yet. Try again later. Every other non-zero exit is a real failure.
 
 set -euo pipefail
 
-VERSION="${1:?usage: build.sh <version> [outdir]}"
+VERSION_INPUT="${1:?usage: build.sh <version> [outdir]}"
 OUTDIR="${2:-dist}"
-RUST_IMAGE="${RUST_IMAGE:-rust:1.98.1-alpine3.24}"
-
-TARGET="x86_64-unknown-linux-musl"
-TAG="c2patool-v${VERSION}"
-UPSTREAM_REPO="contentauth/c2pa-rs"
-ARCHIVE="c2patool-v${VERSION}-${TARGET}.tar.gz"
-LATEST_ARCHIVE="c2patool-${TARGET}.tar.gz"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/config.sh
+. "${REPO_ROOT}/scripts/config.sh"
+
+VERSION="$(normalize_version "$VERSION_INPUT")"
+TAG="$(tag_for "$VERSION")"
+TARGET="${TARGET:-$(target_for_host_arch)}"
+ARCHIVE="$(archive_for "$VERSION" "$TARGET")"
+REPO_URL="${REPO_URL:-https://github.com/reload/c2patool-musl}"
+
+EXIT_NOT_ON_CRATES_IO=75
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$OUTDIR"
 OUTDIR="$(cd "$OUTDIR" && pwd)"
 
-curl_gh() {
-    # Uses GITHUB_TOKEN when it is set, to raise the API rate limit.
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" "$@"
-    else
-        curl -fsSL "$@"
-    fi
-}
+# The files that upstream ships beside the binary. They are the same for every
+# target, so a caller that builds several targets fetches them once and passes
+# the directory in.
+if [ -n "${AUX_DIR:-}" ]; then
+    AUX_DIR="$(cd "$AUX_DIR" && pwd)"
+else
+    AUX_DIR="${WORK}/aux"
+    "${REPO_ROOT}/scripts/fetch-aux.sh" "$VERSION" "$AUX_DIR"
+fi
 
 echo "==> Building c2patool ${VERSION} for ${TARGET} in ${RUST_IMAGE}"
 mkdir -p "${WORK}/out" "${WORK}/build"
+STATUS=0
 docker run --rm \
     -e HOST_UID="$(id -u)" \
     -e HOST_GID="$(id -g)" \
-    -v "${REPO_ROOT}/scripts:/scripts:ro" \
+    -e UPSTREAM_URL="$UPSTREAM_URL" \
+    -e TAG_PREFIX="$TAG_PREFIX" \
+    -v "${REPO_ROOT}/scripts/build-in-container.sh:/build-in-container.sh:ro" \
     -v "${WORK}/out:/out" \
     -v "${WORK}/build:/build" \
     -w /build \
     "$RUST_IMAGE" \
-    /scripts/build-in-container.sh "$VERSION"
+    /build-in-container.sh "$VERSION" "$TARGET" || STATUS=$?
 
-# shellcheck disable=SC1091
-set -a; . "${WORK}/out/build-info.env"; set +a
+if [ "$STATUS" -eq "$EXIT_NOT_ON_CRATES_IO" ]; then
+    echo "==> ${TAG} is tagged upstream but is not on crates.io yet. Nothing was built."
+    exit "$EXIT_NOT_ON_CRATES_IO"
+fi
+if [ "$STATUS" -ne 0 ]; then
+    exit "$STATUS"
+fi
 
-echo "==> Fetching the upstream release archive for the sample files"
-# The asset name is read from the API, because upstream changed the naming
-# convention. Release 0.10.2 used a doubled c2patool- prefix.
-ASSET_URL="$(curl_gh "https://api.github.com/repos/${UPSTREAM_REPO}/releases/tags/${TAG}" \
-    | jq -r '.assets[] | select(.name | endswith("x86_64-unknown-linux-gnu.tar.gz")) | .browser_download_url' \
-    | head -n 1)"
+# The build info is read as data. It is never sourced, because every command in
+# that container ran upstream build scripts as root.
+INFO="${WORK}/out/build-info.json"
+read_info() { jq -er --arg k "$1" '.[$k] | tostring' "$INFO"; }
 
-if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-    echo "error: the upstream release ${TAG} has no x86_64-unknown-linux-gnu archive." >&2
-    echo "The sample files for the smoke test come from that archive." >&2
+BUILT_TARGET="$(read_info target)"
+RUSTC_VERSION="$(read_info rustc)"
+BUILD_SOURCE="$(read_info build_source)"
+BUILD_SOURCE_KIND="$(read_info build_source_kind)"
+
+if [ "$BUILT_TARGET" != "$TARGET" ]; then
+    echo "error: the container built ${BUILT_TARGET}, but ${TARGET} was expected." >&2
     exit 1
 fi
 
-curl -fsSL -o "${WORK}/upstream.tar.gz" "$ASSET_URL"
-mkdir -p "${WORK}/stage"
-tar xzf "${WORK}/upstream.tar.gz" -C "${WORK}/stage"
-
-if [ ! -f "${WORK}/stage/c2patool/c2patool" ]; then
-    echo "error: the upstream archive does not contain c2patool/c2patool." >&2
-    exit 1
+# A tag build that quietly starts always failing would otherwise go unnoticed,
+# because the crates.io fallback keeps producing a release.
+if [ "$BUILD_SOURCE_KIND" = "crates-io" ]; then
+    echo "::warning::The tag build failed and ${TAG} was built from crates.io instead. Check whether the tag build is broken."
 fi
 
 echo "==> Packaging ${ARCHIVE}"
-# The glibc binary is replaced by the musl binary. Every other file, the sample
-# directory included, is the file that upstream shipped.
+mkdir -p "${WORK}/stage/c2patool"
+cp -a "${AUX_DIR}/." "${WORK}/stage/c2patool/"
+rm -f "${WORK}/stage/c2patool/.aux-source"
 install -m 0755 "${WORK}/out/c2patool" "${WORK}/stage/c2patool/c2patool"
 
 FILE_OUTPUT="$(file -b "${WORK}/stage/c2patool/c2patool")"
@@ -84,76 +101,26 @@ It contains c2patool ${VERSION}, compiled from unmodified upstream source for
 ${TARGET}. Every other file in this archive is the file that
 upstream shipped in ${TAG}.
 
-Upstream project: https://github.com/${UPSTREAM_REPO}
+Upstream project: ${UPSTREAM_URL}
 Upstream tag:     ${TAG}
 Built from:       ${BUILD_SOURCE}
 Compiler:         ${RUSTC_VERSION}
 Target:           ${TARGET}
-Built by:         https://github.com/reload/c2patool-musl
+Built by:         ${REPO_URL}
 INFO
 
-# The archive is written with sorted names and no timestamps, so that two
-# builds of the same version produce the same bytes.
+# The archive is written with sorted names and no timestamps, so that two builds
+# of the same version produce the same bytes.
 tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner \
     -C "${WORK}/stage" -cf - c2patool | gzip -9n > "${OUTDIR}/${ARCHIVE}"
 
-cp "${OUTDIR}/${ARCHIVE}" "${OUTDIR}/${LATEST_ARCHIVE}"
-
-( cd "$OUTDIR" && sha256sum "$ARCHIVE" "$LATEST_ARCHIVE" > SHA256SUMS )
-SHA256="$(awk -v f="$ARCHIVE" '$2 == f || $2 == "*"f {print $1}' "${OUTDIR}/SHA256SUMS")"
-
-cp "${WORK}/out/build-info.env" "${OUTDIR}/build-info.env"
-cat >> "${OUTDIR}/build-info.env" <<INFO
-ARCHIVE='${ARCHIVE}'
-LATEST_ARCHIVE='${LATEST_ARCHIVE}'
-SHA256='${SHA256}'
-FILE_OUTPUT='$(printf "%s" "$FILE_OUTPUT" | tr -d "'")'
-RUST_IMAGE='${RUST_IMAGE}'
-INFO
-
-# The upstream release profile already strips the binary in some versions.
-# Reporting two identical numbers reads like a mistake, so say what happened.
-if [ "$SIZE_STRIPPED" -lt "$SIZE_UNSTRIPPED" ]; then
-    SIZE_LINE="${SIZE_STRIPPED} bytes, down from ${SIZE_UNSTRIPPED} bytes before stripping"
-else
-    SIZE_LINE="${SIZE_STRIPPED} bytes. The upstream release profile already strips the binary"
-fi
-
-cat > "${OUTDIR}/release-notes.md" <<INFO
-A static \`c2patool\` ${VERSION} for \`${TARGET}\`.
-
-This is not an official ContentAuth distribution. It is unmodified upstream
-source, compiled for a target that upstream does not publish. See the
-[README](https://github.com/reload/c2patool-musl#readme).
-
-| | |
-|---|---|
-| Upstream version | \`${VERSION}\` |
-| Upstream tag | [\`${TAG}\`](https://github.com/${UPSTREAM_REPO}/releases/tag/${TAG}) |
-| Built from | ${BUILD_SOURCE} |
-| Compiler | \`${RUSTC_VERSION}\` |
-| Build image | \`${RUST_IMAGE}\` |
-| Target triple | \`${TARGET}\` |
-| Binary type | \`${FILE_OUTPUT}\` |
-| Size | ${SIZE_LINE} |
-| sha256 | \`${SHA256}\` |
-
-The binary was tested in \`alpine:3.24\` and in \`debian:bookworm-slim\` before
-this release was published. It reads a manifest from \`sample/C.jpg\` and
-reports no claim for \`sample/image.jpg\`.
-
-## Download
-
-\`\`\`sh
-curl -fsSL -o c2patool.tar.gz \\
-  https://github.com/reload/c2patool-musl/releases/download/${TAG}/${ARCHIVE}
-echo "${SHA256}  c2patool.tar.gz" | sha256sum -c -
-tar xzf c2patool.tar.gz --strip-components=1 c2patool/c2patool
-\`\`\`
-
-The same build is always available at a stable URL:
-\`https://github.com/reload/c2patool-musl/releases/latest/download/${LATEST_ARCHIVE}\`
-INFO
+# The host adds what only the host knows. The container never writes this file.
+jq --arg archive "$ARCHIVE" \
+   --arg file_output "$FILE_OUTPUT" \
+   --arg rust_image "$RUST_IMAGE" \
+   --arg tag "$TAG" \
+   '. + {archive: $archive, file_output: $file_output, rust_image: $rust_image, upstream_tag: $tag}' \
+   "$INFO" > "${OUTDIR}/build-info-${TARGET}.json"
 
 echo "==> Done"
-ls -l "$OUTDIR"
+ls -l "${OUTDIR}/${ARCHIVE}"

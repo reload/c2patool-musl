@@ -1,11 +1,15 @@
 # Keeps the scheduled workflows enabled.
 #
 # GitHub disables the scheduled workflows in a repository after 60 days without
-# repository activity. Published releases do not reset that timer reliably. This
-# workflow writes a commit when the last commit is more than 45 days old, which
-# resets the timer before the deadline.
+# repository activity. A published release does not reset that timer, because
+# the timer counts commits. Upstream can go quiet for longer than 60 days, and
+# the daily check would then stop without anybody noticing.
 #
-# Permissions: contents: write, to push the commit.
+# This workflow writes a commit when the last commit is more than 45 days old.
+# The commit resets the 60 day timer.
+#
+# Permissions: contents: write to push the commit. issues: write to report a
+# failure, because a keepalive that fails in silence defeats its own purpose.
 
 name: Keepalive
 
@@ -47,3 +51,26 @@ jobs:
           git commit -m "Update the keepalive timestamp"
           git push
           echo "Pushed a keepalive commit. The scheduled workflows stay enabled."
+
+  report-failure:
+    name: Report the failure
+    needs: keepalive
+    if: failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    concurrency:
+      group: report-failure
+      cancel-in-progress: false
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/report-failure
+        with:
+          title: The keepalive failed
+          what-failed: >-
+            The keepalive failed. The scheduled workflows will be disabled after
+            60 days without a commit
+          token: ${{ github.token }}

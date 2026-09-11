@@ -1,9 +1,10 @@
 # Looks for a newer upstream c2patool release once a day and builds it.
-# Only the newest upstream release is built. To build any other version, run
-# the "Build and release" workflow by hand.
+# Only the newest upstream release is built. To build any other version, run the
+# "Build and release" workflow by hand.
 #
-# Permissions: contents: write and issues: write, because this workflow calls
-# the build workflow and passes its own permissions down.
+# Permissions: the check job needs contents: read. The build job needs
+# contents: write and issues: write, because a called workflow runs with the
+# permissions of the job that calls it.
 
 name: Check upstream
 
@@ -15,9 +16,6 @@ on:
 permissions:
   contents: read
 
-env:
-  UPSTREAM_REPO: contentauth/c2pa-rs
-
 jobs:
   check:
     name: Compare upstream against this repository
@@ -28,6 +26,11 @@ jobs:
       needs_build: ${{ steps.compare.outputs.needs_build }}
       version: ${{ steps.compare.outputs.version }}
     steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Compare the newest upstream release against the newest release here
         id: compare
         env:
@@ -35,17 +38,18 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          . ./scripts/config.sh
 
           # Upstream tags a c2patool release as c2patool-vX.Y.Z in the c2pa-rs
           # repository. The releases for the other crates are ignored.
           UPSTREAM="$(gh api "repos/${UPSTREAM_REPO}/releases?per_page=100" \
-            --jq '.[] | select(.draft == false) | select(.prerelease == false)
-                  | select(.tag_name | startswith("c2patool-v")) | .tag_name' \
-            | sed 's/^c2patool-v//' | sort -V | tail -n 1)"
+            --jq --arg p "$TAG_PREFIX" '.[] | select(.draft == false) | select(.prerelease == false)
+                  | select(.tag_name | startswith($p)) | .tag_name' \
+            | sed "s/^${TAG_PREFIX}//" | sort -V | tail -n 1)"
 
           OURS="$(gh release list --limit 200 --json tagName,isDraft \
             --jq '.[] | select(.isDraft == false) | .tagName' \
-            | sed 's/^c2patool-v//' | sort -V | tail -n 1)"
+            | sed "s/^${TAG_PREFIX}//" | sort -V | tail -n 1)"
 
           echo "Newest upstream release: ${UPSTREAM:-none}"
           echo "Newest release here:     ${OURS:-none}"
@@ -89,36 +93,20 @@ jobs:
     needs: check
     # Only a failure of the check job is reported here. A failed build reports
     # itself, so one failure never opens two issues.
-    if: failure() && needs.check.result == 'failure'
+    if: failure() && needs.check.result == 'failure' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       issues: write
+    concurrency:
+      group: report-failure
+      cancel-in-progress: false
     steps:
-      - name: Open the failure issue, or comment on the open one
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          BODY="The daily upstream check failed on $(date -u +'%Y-%m-%d %H:%M UTC').
-
-          Run: ${RUN_URL}
-
-          This issue stays open and collects a comment for every later failure.
-          Close it after the cause is fixed. The next failure opens a new one."
-
-          gh label create build-failure --color B60205 \
-            --description "An automated build or upstream check failed" 2>/dev/null || true
-
-          NUMBER="$(gh issue list --state open --label build-failure --limit 1 \
-            --json number --jq '.[0].number // empty')"
-
-          if [ -n "$NUMBER" ]; then
-            gh issue comment "$NUMBER" --body "$BODY"
-          else
-            gh issue create \
-              --title "The daily upstream check failed" \
-              --label build-failure \
-              --body "$BODY"
-          fi
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/report-failure
+        with:
+          title: The daily upstream check failed
+          what-failed: The daily upstream check failed
+          token: ${{ github.token }}
