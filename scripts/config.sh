@@ -3,11 +3,22 @@
 # Shared constants and helpers. Sourced, never executed.
 # Every value can be overridden from the environment.
 
-UPSTREAM_REPO="${UPSTREAM_REPO:-contentauth/c2pa-rs}"
-UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}"
+# Upstream tags a c2patool release as vX.Y.Z in the c2patool repository.
+UPSTREAM_REPO="${UPSTREAM_REPO:-contentauth/c2patool}"
+UPSTREAM_TAG_PREFIX="${UPSTREAM_TAG_PREFIX:-v}"
 
-# Upstream tags a c2patool release as c2patool-vX.Y.Z in the c2pa-rs repository.
-TAG_PREFIX="c2patool-v"
+# Before this version, upstream tagged c2patool-vX.Y.Z in the c2pa-rs repository.
+LEGACY_BEFORE="0.28.0"
+LEGACY_UPSTREAM_REPO="contentauth/c2pa-rs"
+LEGACY_UPSTREAM_TAG_PREFIX="c2patool-v"
+
+# This repository tags its releases c2patool-vX.Y.Z and names archives after
+# that tag, whatever upstream does. Consumers pin these URLs.
+RELEASE_TAG_PREFIX="c2patool-v"
+
+# crates.io lists every release, whichever repository upstream tags it in.
+CRATES_IO_API="https://crates.io/api/v1/crates/c2patool"
+CRATES_IO_USER_AGENT="reload/c2patool-musl (https://github.com/reload/c2patool-musl)"
 
 # Must be musl hosted: a plain cargo install then produces a static binary.
 RUST_IMAGE="${RUST_IMAGE:-rust:1.98.1-alpine3.24}"
@@ -45,14 +56,41 @@ normalize_version() {
     printf '%s' "$_v"
 }
 
+# True when sort -V puts $1 before $2.
+version_lt() {
+    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
+}
+
+# Prints the upstream repository, owner/name, that released a version.
+upstream_repo_for() {
+    if version_lt "$1" "$LEGACY_BEFORE"; then
+        printf '%s' "$LEGACY_UPSTREAM_REPO"
+    else
+        printf '%s' "$UPSTREAM_REPO"
+    fi
+}
+
+upstream_url_for() {
+    printf 'https://github.com/%s' "$(upstream_repo_for "$1")"
+}
+
 # Prints the upstream tag for a version number.
-tag_for() {
-    printf '%s%s' "$TAG_PREFIX" "$1"
+upstream_tag_for() {
+    if version_lt "$1" "$LEGACY_BEFORE"; then
+        printf '%s%s' "$LEGACY_UPSTREAM_TAG_PREFIX" "$1"
+    else
+        printf '%s%s' "$UPSTREAM_TAG_PREFIX" "$1"
+    fi
+}
+
+# Prints this repository's release tag for a version number.
+release_tag_for() {
+    printf '%s%s' "$RELEASE_TAG_PREFIX" "$1"
 }
 
 # Prints the release asset name for a version and a target.
 archive_for() {
-    printf '%s%s-%s.tar.gz' "$TAG_PREFIX" "$1" "$2"
+    printf '%s-%s.tar.gz' "$(release_tag_for "$1")" "$2"
 }
 
 # The version independent name, which /releases/latest/download/ needs.

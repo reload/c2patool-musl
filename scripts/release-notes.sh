@@ -13,7 +13,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/config.sh
 . "${REPO_ROOT}/scripts/config.sh"
 
-TAG="$(tag_for "$VERSION")"
+TAG="$(release_tag_for "$VERSION")"
+UPSTREAM_URL="$(upstream_url_for "$VERSION")"
+UPSTREAM_TAG="$(upstream_tag_for "$VERSION")"
 REPO_URL="${REPO_URL:-https://github.com/reload/c2patool-musl}"
 DIST="$(cd "$DIST" && pwd)"
 
@@ -77,7 +79,7 @@ at the newest release.
 | | |
 |---|---|
 | Upstream version | \`${VERSION}\` |
-| Upstream tag | [\`${TAG}\`](${UPSTREAM_URL}/releases/tag/${TAG}) |
+| Upstream tag | [\`${UPSTREAM_TAG}\`](${UPSTREAM_URL}/releases/tag/${UPSTREAM_TAG}) |
 MD
 
 format_field build_source "Built from"

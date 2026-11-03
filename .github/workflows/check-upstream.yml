@@ -1,5 +1,9 @@
-# Builds the newest upstream c2patool release once a day. For any other
+# Builds the newest c2patool release on crates.io once a day. For any other
 # version, run "Build and release" by hand.
+#
+# crates.io, not GitHub, decides what is newest: it lists every release, whichever
+# repository upstream tags it in. When crates.io is ahead and the upstream tag is
+# missing, the check fails, so an upstream move can never go quiet.
 #
 # Permissions: contents: read to check. The build job needs contents: write and
 # issues: write, because a called workflow runs with its caller's permissions.
@@ -10,6 +14,12 @@ on:
   schedule:
     - cron: "40 6 * * *"
   workflow_dispatch:
+    inputs:
+      pretend_version:
+        description: "Test only: use this version instead of the one crates.io reports, for example 9.9.9"
+        required: false
+        default: ""
+        type: string
 
 permissions: {}
 
@@ -34,26 +44,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          # Through the environment, never interpolated: an input must not
+          # become shell code.
+          PRETEND_VERSION: ${{ inputs.pretend_version }}
         run: |
           set -euo pipefail
           . ./scripts/config.sh
 
-          # c2pa-rs also releases other crates, so filter by tag prefix.
-          # gh api --jq takes one argument, so the filter runs in jq itself.
-          UPSTREAM="$(gh api "repos/${UPSTREAM_REPO}/releases?per_page=100" \
-            | jq -r --arg p "$TAG_PREFIX" '.[] | select(.draft == false) | select(.prerelease == false)
-                  | select(.tag_name | startswith($p)) | .tag_name' \
-            | sed "s/^${TAG_PREFIX}//" | sort -V | tail -n 1)"
+          # max_stable_version skips pre-releases and yanked versions.
+          CRATE="$(curl -fsS --retry 3 -H "User-Agent: ${CRATES_IO_USER_AGENT}" "$CRATES_IO_API")"
+          if [ -n "$PRETEND_VERSION" ]; then
+            UPSTREAM="$(normalize_version "$PRETEND_VERSION")"
+            echo "::warning::Test run: pretending that crates.io reports ${UPSTREAM}."
+          else
+            UPSTREAM="$(jq -r '.crate.max_stable_version // empty' <<<"$CRATE")"
+          fi
 
           OURS="$(gh release list --limit 200 --json tagName,isDraft \
             --jq '.[] | select(.isDraft == false) | .tagName' \
-            | sed "s/^${TAG_PREFIX}//" | sort -V | tail -n 1)"
+            | sed "s/^${RELEASE_TAG_PREFIX}//" | sort -V | tail -n 1)"
 
-          echo "Newest upstream release: ${UPSTREAM:-none}"
-          echo "Newest release here:     ${OURS:-none}"
+          echo "Newest version on crates.io: ${UPSTREAM:-none}"
+          echo "Newest release here:         ${OURS:-none}"
 
-          if [ -z "$UPSTREAM" ]; then
-            echo "::error::No upstream c2patool release was found. The API or the tag naming changed."
+          if ! printf '%s' "$UPSTREAM" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::crates.io reported '${UPSTREAM}', which is not a version number. The crates.io API changed."
             exit 1
           fi
 
@@ -61,22 +76,43 @@ jobs:
           if [ "$UPSTREAM" = "$OURS" ] || [ "$NEWEST" != "$UPSTREAM" ]; then
             # Equal versions are not enough: a release can lose an asset, and
             # a target added later leaves older releases short of one.
-            MISSING="$(gh release view "$(tag_for "$OURS")" --json assets \
+            MISSING="$(gh release view "$(release_tag_for "$OURS")" --json assets \
               | missing_assets "$OURS" | tr '\n' ' ')"
             if [ -n "${MISSING// /}" ]; then
-              echo "::error::The newest release here, ${TAG_PREFIX}${OURS}, is missing assets: ${MISSING}"
+              echo "::error::The newest release here, $(release_tag_for "$OURS"), is missing assets: ${MISSING}"
               echo "::error::Run the build workflow by hand with force to rebuild it. That changes the published checksums."
               exit 1
             fi
 
-            echo "Decision: nothing to do. Upstream ${UPSTREAM} is already published here with every asset."
+            echo "Decision: nothing to do. ${UPSTREAM} is already published here with every asset."
             echo "needs_build=false" >> "$GITHUB_OUTPUT"
-            SUMMARY="Nothing to do. Upstream is \`${UPSTREAM}\`, published here is \`${OURS:-none}\`, with every asset."
+            SUMMARY="Nothing to do. crates.io has \`${UPSTREAM}\`, published here is \`${OURS:-none}\`, with every asset."
           else
-            echo "Decision: build ${UPSTREAM}."
-            echo "needs_build=true" >> "$GITHUB_OUTPUT"
-            echo "version=${UPSTREAM}" >> "$GITHUB_OUTPUT"
-            SUMMARY="Building \`${UPSTREAM}\`. Published here is \`${OURS:-none}\`."
+            REPO="$(upstream_repo_for "$UPSTREAM")"
+            TAG="$(upstream_tag_for "$UPSTREAM")"
+            if gh api "repos/${REPO}/releases/tags/${TAG}" --jq .tag_name >/dev/null 2>&1; then
+              echo "Decision: build ${UPSTREAM} from ${REPO} at ${TAG}."
+              echo "needs_build=true" >> "$GITHUB_OUTPUT"
+              echo "version=${UPSTREAM}" >> "$GITHUB_OUTPUT"
+              SUMMARY="Building \`${UPSTREAM}\` from \`${REPO}\` at \`${TAG}\`. Published here is \`${OURS:-none}\`."
+            else
+              # crates.io can publish minutes before the GitHub release, so
+              # a fresh version gets a day before this counts as a fault.
+              CREATED="$(jq -r --arg v "$UPSTREAM" '.versions[]? | select(.num == $v) | .created_at' <<<"$CRATE")"
+              AGE=""
+              if [ -n "$CREATED" ]; then
+                AGE=$(( ( $(date -u +%s) - $(date -u -d "$CREATED" +%s) ) / 3600 ))
+              fi
+              if [ -n "$AGE" ] && [ "$AGE" -lt 24 ]; then
+                echo "::warning::crates.io published ${UPSTREAM} ${AGE} hours ago, and ${REPO} has no release tagged ${TAG} yet. It is left for the next run."
+                echo "needs_build=false" >> "$GITHUB_OUTPUT"
+                SUMMARY="Waiting. crates.io has \`${UPSTREAM}\`, but \`${REPO}\` has no release \`${TAG}\` yet."
+              else
+                echo "::error::crates.io has c2patool ${UPSTREAM}, but ${REPO} has no release tagged ${TAG}. Newest release here: ${OURS:-none}."
+                echo "::error::Upstream may have moved its releases or changed its tag naming. Update the upstream settings in scripts/config.sh."
+                exit 1
+              fi
+            fi
           fi
 
           {

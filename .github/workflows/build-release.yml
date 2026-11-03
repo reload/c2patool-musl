@@ -1,7 +1,8 @@
 # Builds one upstream c2patool version for every musl target and publishes it.
 #
 # Only the publish job can write. The build job compiles upstream source, so it
-# runs read-only and publish never executes what it produced.
+# runs read-only and publish never executes what it produced. Publish runs only
+# on main, so a run on any other branch builds and tests without releasing.
 #
 # Permissions: contents: read to prepare and build, contents: write to publish,
 # issues: write to report a failure.
@@ -72,7 +73,7 @@ jobs:
           fi
           {
             echo "version=${V}"
-            echo "tag=$(tag_for "$V")"
+            echo "tag=$(release_tag_for "$V")"
             echo "matrix=$(matrix_json)"
           } >> "$GITHUB_OUTPUT"
           echo "Version ${V}, targets:"
@@ -82,13 +83,15 @@ jobs:
         id: upstream
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
+          V: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           . ./scripts/config.sh
+          REPO="$(upstream_repo_for "$V")"
+          TAG="$(upstream_tag_for "$V")"
 
-          if ! PUBLISHED="$(gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG}" --jq .published_at 2>/dev/null)"; then
-            echo "::error::${UPSTREAM_REPO} has no release tagged ${TAG}."
+          if ! PUBLISHED="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .published_at 2>/dev/null)"; then
+            echo "::error::${REPO} has no release tagged ${TAG}."
             exit 1
           fi
 
@@ -238,7 +241,9 @@ jobs:
         run: |
           set -euo pipefail
           . ./scripts/config.sh
-          ./scripts/smoke-test.sh "dist/$(archive_for "$V" "$TARGET")" "$V"
+          A="$(archive_for "$V" "$TARGET")"
+          ./scripts/smoke-test.sh "dist/${A}" "$V"
+          ( cd dist && sha256sum "$A" ) | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Hand the result to the publish job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -251,7 +256,7 @@ jobs:
   publish:
     name: Publish the release
     needs: [prepare, build]
-    if: needs.prepare.outputs.skip != 'true'
+    if: needs.prepare.outputs.skip != 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -323,7 +328,7 @@ jobs:
           # An older version must not move /releases/latest/download/ back.
           HIGHEST="$(gh release list --limit 200 --json tagName,isDraft \
             --jq '.[] | select(.isDraft == false) | .tagName' \
-            | sed "s/^${TAG_PREFIX}//" | sort -V | tail -n 1)"
+            | sed "s/^${RELEASE_TAG_PREFIX}//" | sort -V | tail -n 1)"
           if [ -z "$HIGHEST" ] || [ "$(printf '%s\n%s\n' "$HIGHEST" "$V" | sort -V | tail -n 1)" = "$V" ]; then
             LATEST=true
           else
