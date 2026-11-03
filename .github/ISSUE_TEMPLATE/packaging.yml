@@ -1,0 +1,40 @@
+name: Build or packaging problem
+description: A problem with a binary or a release published here.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        This repository compiles unmodified upstream source. If the upstream
+        glibc or macOS build behaves the same way, report it to
+        [contentauth/c2patool](https://github.com/contentauth/c2patool/issues).
+  - type: input
+    id: version
+    attributes:
+      label: c2patool version
+      placeholder: 0.28.4
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target
+      options:
+        - x86_64-unknown-linux-musl
+        - aarch64-unknown-linux-musl
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Distribution or image
+      placeholder: alpine:3.24, Debian 12, ubuntu-latest runner
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The commands you ran, the output, and what you expected.
+    validations:
+      required: true

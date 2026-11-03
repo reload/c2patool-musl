@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: c2patool bug or feature request
+    url: https://github.com/contentauth/c2patool/issues
+    about: The behavior of c2patool itself. The binaries here are compiled from unmodified upstream source.
+  - name: Security vulnerability
+    url: https://github.com/reload/c2patool-musl/security/advisories/new
+    about: Report privately. A vulnerability in c2patool itself goes upstream, see SECURITY.md.
