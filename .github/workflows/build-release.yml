@@ -43,7 +43,6 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       matrix: ${{ steps.version.outputs.matrix }}
       skip: ${{ steps.release.outputs.skip }}
-      release_state: ${{ steps.release.outputs.state }}
       age_hours: ${{ steps.upstream.outputs.age_hours }}
     steps:
       - name: Check out this repository
@@ -102,20 +101,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! RELEASE="$(gh release view "$TAG" --json isDraft 2>/dev/null)"; then
-            STATE=absent
-          elif [ "$(jq -r .isDraft <<<"$RELEASE")" = "true" ]; then
-            # A run that died mid-upload leaves a draft. A draft has no
-            # consumers, so replacing it is safe.
-            STATE=draft
-          else
-            STATE=published
-          fi
-
-          echo "Release ${TAG} is ${STATE}."
-          echo "state=${STATE}" >> "$GITHUB_OUTPUT"
-          if [ "$STATE" = "published" ]; then
-            echo "Nothing to do."
+          # A read-only token sees published releases only.
+          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            echo "${TAG} is published. Nothing to do."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -288,7 +276,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           V: ${{ needs.prepare.outputs.version }}
           TAG: ${{ needs.prepare.outputs.tag }}
-          STATE: ${{ needs.prepare.outputs.release_state }}
         run: |
           set -euo pipefail
           . ./scripts/config.sh
@@ -309,9 +296,19 @@ jobs:
           fi
           echo "Highest published version: ${HIGHEST:-none}. Mark as latest: ${LATEST}."
 
-          if [ "$STATE" = "draft" ]; then
+          # A run that died mid-upload leaves a draft, which has no consumers.
+          # Only a token that can write sees drafts.
+          ERR="$(mktemp)"
+          if IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>"$ERR")"; then
+            if [ "$IS_DRAFT" != "true" ]; then
+              echo "::error::${TAG} is already published."
+              exit 1
+            fi
             echo "Replacing the leftover draft."
             gh release delete "$TAG" --yes
+          elif ! grep -q 'release not found' "$ERR"; then
+            cat "$ERR" >&2
+            exit 1
           fi
 
           # gh uploads the assets to a draft and publishes it last, which

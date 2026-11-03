@@ -78,11 +78,14 @@ jobs:
           else
             REPO="$(upstream_repo_for "$UPSTREAM")"
             TAG="$(upstream_tag_for "$UPSTREAM")"
-            if gh api "repos/${REPO}/releases/tags/${TAG}" --jq .tag_name >/dev/null 2>&1; then
+            if ERR="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .tag_name 2>&1 >/dev/null)"; then
               echo "Decision: build ${UPSTREAM} from ${REPO} at ${TAG}."
               echo "needs_build=true" >> "$GITHUB_OUTPUT"
               echo "version=${UPSTREAM}" >> "$GITHUB_OUTPUT"
               SUMMARY="Building \`${UPSTREAM}\` from \`${REPO}\` at \`${TAG}\`. Published here is \`${OURS:-none}\`."
+            elif ! grep -q 'HTTP 404' <<<"$ERR"; then
+              echo "::error::Looking up ${TAG} in ${REPO} failed: ${ERR}"
+              exit 1
             else
               # The GitHub release can lag the crates.io publish.
               CREATED="$(jq -r --arg v "$UPSTREAM" '.versions[]? | select(.num == $v) | .created_at' <<<"$CRATE")"
