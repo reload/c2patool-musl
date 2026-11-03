@@ -36,7 +36,7 @@ curl_gh() {
 # once the route finishes.
 
 # Route 1: upstream's release archive, which gives the exact layout. The asset
-# name comes from the API, because upstream has changed the convention before.
+# name comes from the API rather than a naming convention.
 from_release_archive() {
     stage="${WORK}/release-archive"
     rm -rf "$stage" || return 1

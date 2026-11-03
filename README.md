@@ -134,14 +134,12 @@ absolute paths into it. Compare the behavior and the version, not the sha256.
 
 There is no upstream source here, so there is nothing to merge. Every release
 compiles the upstream release tag. `scripts/config.sh` holds the upstream
-repository and tag prefix, the pinned image and the target list.
-
-Upstream tags a release `vX.Y.Z` in `contentauth/c2patool`. Up to 0.27.22 it
-tagged `c2patool-vX.Y.Z` in `contentauth/c2pa-rs`, and `config.sh` still maps
-versions before 0.28.0 there, so `c2patool-v0.27.22` can be rebuilt. Releases
-here are always tagged `c2patool-vX.Y.Z`, with archives named after that tag,
-whatever upstream does. That list
+repository and tag prefixes, the pinned image and the target list. That list
 drives the build matrix, the asset checks and the release notes.
+
+Upstream tags `vX.Y.Z` in `contentauth/c2patool`. Versions before 0.28.0 map to
+`c2patool-vX.Y.Z` in `contentauth/c2pa-rs`. Releases here are always tagged
+`c2patool-vX.Y.Z`.
 
 Each target builds on a runner of its own architecture, so the container is
 native. Cross compilation fights the OpenSSL that the dependency tree builds,
@@ -175,8 +173,8 @@ versioned archive per target, a copy at a name without the version for the
 
 Only publish can write. Build runs upstream build scripts, so it is read-only
 with no checkout credential, and publish reads its metadata as JSON, never as
-shell. Publish runs only on `main`. A run on any other branch builds and tests,
-writes the sha256 of each archive to the run summary, and releases nothing.
+shell. Publish runs only on `main`. On other branches a run builds, tests and
+writes each archive's sha256 to the run summary.
 
 To build any version by hand, start the workflow from the Actions tab. A
 complete release is skipped. A published release that is missing assets stops
@@ -185,27 +183,19 @@ the run, because rebuilding changes checksums that people have pinned. The
 
 ### Check upstream
 
-`check-upstream.yml` runs daily at 06:40 UTC. It takes the newest stable
-version from [crates.io](https://crates.io/crates/c2patool), compares it with
-the newest release here, and builds when crates.io is ahead. crates.io lists
-every release whichever repository upstream tags it in, so a move upstream
-cannot hide a release the way GitHub tags did. Only the newest version is built.
-When the two match, it also checks that the release here still holds every
-asset.
+`check-upstream.yml` runs daily at 06:40 UTC. It builds when the newest stable
+version on [crates.io](https://crates.io/crates/c2patool) is ahead of the newest
+release here. Only the newest version is built. When the two match, it checks
+that the release here still holds every asset.
 
-Before it builds, the check looks up the upstream release tag. When crates.io
-has a version and upstream has no matching release, the check fails and opens
-an issue: upstream has probably moved or renamed its tags, and the settings in
-`scripts/config.sh` need updating. A version published to crates.io less than 24
-hours ago gets a warning instead, because the GitHub release can lag behind.
+If the matching upstream release is missing, the check fails, unless the
+version reached crates.io less than 24 hours ago. Update the upstream settings
+in `scripts/config.sh` when that happens. To test this, run the check by hand
+with `pretend_version` set to a version that does not exist, such as `9.9.9`.
 
-A GitHub release can also appear seconds before its crates.io publish. If the
-tag build fails and crates.io answers a plain "not found", the run stops with a
-warning and the next day takes it. Any other answer, or a version still missing
-after 24 hours, is a failure.
-
-To test the alarm, start the check by hand with `pretend_version` set to a
-version that does not exist, such as `9.9.9`. The run fails at the tag lookup.
+If the tag build fails and crates.io answers a plain "not found", the build
+stops with a warning and the next day takes it. Any other answer, or a version
+still missing after 24 hours, is a failure.
 
 ### Keepalive
 

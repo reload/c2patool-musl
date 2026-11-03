@@ -1,9 +1,6 @@
-# Builds the newest c2patool release on crates.io once a day. For any other
-# version, run "Build and release" by hand.
-#
-# crates.io, not GitHub, decides what is newest: it lists every release, whichever
-# repository upstream tags it in. When crates.io is ahead and the upstream tag is
-# missing, the check fails, so an upstream move can never go quiet.
+# Builds the newest stable c2patool on crates.io once a day, and fails when its
+# upstream release is missing. For any other version, run "Build and release"
+# by hand.
 #
 # Permissions: contents: read to check. The build job needs contents: write and
 # issues: write, because a called workflow runs with its caller's permissions.
@@ -96,8 +93,7 @@ jobs:
               echo "version=${UPSTREAM}" >> "$GITHUB_OUTPUT"
               SUMMARY="Building \`${UPSTREAM}\` from \`${REPO}\` at \`${TAG}\`. Published here is \`${OURS:-none}\`."
             else
-              # crates.io can publish minutes before the GitHub release, so
-              # a fresh version gets a day before this counts as a fault.
+              # The GitHub release can lag the crates.io publish.
               CREATED="$(jq -r --arg v "$UPSTREAM" '.versions[]? | select(.num == $v) | .created_at' <<<"$CRATE")"
               AGE=""
               if [ -n "$CREATED" ]; then
@@ -109,7 +105,7 @@ jobs:
                 SUMMARY="Waiting. crates.io has \`${UPSTREAM}\`, but \`${REPO}\` has no release \`${TAG}\` yet."
               else
                 echo "::error::crates.io has c2patool ${UPSTREAM}, but ${REPO} has no release tagged ${TAG}. Newest release here: ${OURS:-none}."
-                echo "::error::Upstream may have moved its releases or changed its tag naming. Update the upstream settings in scripts/config.sh."
+                echo "::error::Update the upstream settings in scripts/config.sh."
                 exit 1
               fi
             fi

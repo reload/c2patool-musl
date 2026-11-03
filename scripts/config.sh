@@ -3,20 +3,17 @@
 # Shared constants and helpers. Sourced, never executed.
 # Every value can be overridden from the environment.
 
-# Upstream tags a c2patool release as vX.Y.Z in the c2patool repository.
 UPSTREAM_REPO="${UPSTREAM_REPO:-contentauth/c2patool}"
 UPSTREAM_TAG_PREFIX="${UPSTREAM_TAG_PREFIX:-v}"
 
-# Before this version, upstream tagged c2patool-vX.Y.Z in the c2pa-rs repository.
+# Versions before LEGACY_BEFORE were released from the legacy repository.
 LEGACY_BEFORE="0.28.0"
 LEGACY_UPSTREAM_REPO="contentauth/c2pa-rs"
 LEGACY_UPSTREAM_TAG_PREFIX="c2patool-v"
 
-# This repository tags its releases c2patool-vX.Y.Z and names archives after
-# that tag, whatever upstream does. Consumers pin these URLs.
+# Tags and archive names here. Consumers pin these URLs.
 RELEASE_TAG_PREFIX="c2patool-v"
 
-# crates.io lists every release, whichever repository upstream tags it in.
 CRATES_IO_API="https://crates.io/api/v1/crates/c2patool"
 CRATES_IO_USER_AGENT="reload/c2patool-musl (https://github.com/reload/c2patool-musl)"
 
@@ -61,7 +58,7 @@ version_lt() {
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
 }
 
-# Prints the upstream repository, owner/name, that released a version.
+# Prints the upstream owner/name that released a version.
 upstream_repo_for() {
     if version_lt "$1" "$LEGACY_BEFORE"; then
         printf '%s' "$LEGACY_UPSTREAM_REPO"

@@ -9,7 +9,7 @@ set -eu
 
 VERSION="${1:?usage: build-in-container.sh <version> <expected-target>}"
 EXPECT_TARGET="${2:?usage: build-in-container.sh <version> <expected-target>}"
-# The host resolves both from scripts/config.sh, because they depend on the version.
+# Set by build.sh from scripts/config.sh.
 UPSTREAM_URL="${UPSTREAM_URL:?UPSTREAM_URL must be set}"
 TAG="${UPSTREAM_TAG:?UPSTREAM_TAG must be set}"
 
