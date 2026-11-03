@@ -2,8 +2,9 @@
 # upstream release is missing. For any other version, run "Build and release"
 # by hand.
 #
-# Permissions: contents: read to check. The build job needs contents: write and
-# issues: write, because a called workflow runs with its caller's permissions.
+# Permissions: contents: read to check. The build job needs contents: write,
+# id-token: write, attestations: write and issues: write, because a called
+# workflow runs with its caller's permissions.
 
 name: Check upstream
 
@@ -113,6 +114,8 @@ jobs:
     if: needs.check.outputs.needs_build == 'true'
     permissions:
       contents: write
+      id-token: write
+      attestations: write
       issues: write
     uses: ./.github/workflows/build-release.yml
     with:
