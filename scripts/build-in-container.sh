@@ -9,9 +9,9 @@ set -eu
 
 VERSION="${1:?usage: build-in-container.sh <version> <expected-target>}"
 EXPECT_TARGET="${2:?usage: build-in-container.sh <version> <expected-target>}"
-UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/contentauth/c2pa-rs}"
-TAG_PREFIX="${TAG_PREFIX:-c2patool-v}"
-TAG="${TAG_PREFIX}${VERSION}"
+# Set by build.sh from scripts/config.sh.
+UPSTREAM_URL="${UPSTREAM_URL:?UPSTREAM_URL must be set}"
+TAG="${UPSTREAM_TAG:?UPSTREAM_TAG must be set}"
 
 EXIT_NOT_ON_CRATES_IO=75
 

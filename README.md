@@ -22,7 +22,7 @@ compiles.
 ## Why
 
 `c2patool` reads C2PA manifests, also called Content Credentials, out of media
-files. Upstream, [contentauth/c2pa-rs](https://github.com/contentauth/c2pa-rs),
+files. Upstream, [contentauth/c2patool](https://github.com/contentauth/c2patool),
 publishes it for macOS, Windows and Linux with glibc, but not for musl, the C
 library that Alpine Linux uses. The glibc build also needs `GLIBC_2.39`, so it
 does not start on Debian 12 either, which has glibc 2.36.
@@ -45,7 +45,7 @@ upstream's layout, so a command that unpacks the upstream archive works
 unchanged.
 
 ```sh
-VERSION=0.27.22
+VERSION=0.28.4
 TARGET=x86_64-unknown-linux-musl
 BASE=https://github.com/reload/c2patool-musl/releases/download/c2patool-v${VERSION}
 ARCHIVE="c2patool-v${VERSION}-${TARGET}.tar.gz"
@@ -74,7 +74,7 @@ that matters. It matches the host unless you force a platform.
 
 ```yaml
 vars:
-  C2PATOOL_VERSION: 0.27.22
+  C2PATOOL_VERSION: 0.28.4
   C2PATOOL_TARGET:
     sh: |
       case "$(uname -m)" in
@@ -117,15 +117,15 @@ docker run --rm -v "$PWD:/work" -w /work rust:1.98.1-alpine3.24 sh -c '
   set -e
   apk add --no-cache build-base musl-dev perl cmake pkgconf binutils git
   cargo install --locked --root /work/out \
-    --git https://github.com/contentauth/c2pa-rs --tag c2patool-v0.27.22 c2patool
+    --git https://github.com/contentauth/c2patool --tag v0.28.4 c2patool
   strip -o /work/c2patool /work/out/bin/c2patool
 '
 ```
 
 The image is musl hosted, so a plain `cargo install` gives a static binary.
 `perl` and `cmake` are needed because the dependency tree compiles its own
-OpenSSL. From a clone, `./scripts/build.sh 0.27.22 dist` followed by
-`./scripts/smoke-test.sh dist/<archive> 0.27.22` runs the same steps.
+OpenSSL. From a clone, `./scripts/build.sh 0.28.4 dist` followed by
+`./scripts/smoke-test.sh dist/<archive> 0.28.4` runs the same steps.
 
 Your binary is not byte for byte the published one, because rustc writes
 absolute paths into it. Compare the behavior and the version, not the sha256.
@@ -134,8 +134,12 @@ absolute paths into it. Compare the behavior and the version, not the sha256.
 
 There is no upstream source here, so there is nothing to merge. Every release
 compiles the upstream release tag. `scripts/config.sh` holds the upstream
-repository, the tag prefix, the pinned image and the target list. That list
+repository and tag prefixes, the pinned image and the target list. That list
 drives the build matrix, the asset checks and the release notes.
+
+Upstream tags `vX.Y.Z` in `contentauth/c2patool`. Versions before 0.28.0 map to
+`c2patool-vX.Y.Z` in `contentauth/c2pa-rs`. Releases here are always tagged
+`c2patool-vX.Y.Z`.
 
 Each target builds on a runner of its own architecture, so the container is
 native. Cross compilation fights the OpenSSL that the dependency tree builds,
@@ -153,7 +157,7 @@ beside the binary, including `sample/`. They come from the upstream release
 archive, or from the source tag if that archive is missing.
 
 Build runs once per target. It runs `cargo install --git
-https://github.com/contentauth/c2pa-rs --tag c2patool-vX.Y.Z c2patool --locked`
+https://github.com/contentauth/c2patool --tag vX.Y.Z c2patool --locked`
 in `rust:1.98.1-alpine3.24`, finding the crate by package name because upstream
 moved it once. If that fails, it falls back to crates.io with a warning. It then
 tests the binary in `alpine:3.24` and in `debian:bookworm-slim`:
@@ -169,7 +173,8 @@ versioned archive per target, a copy at a name without the version for the
 
 Only publish can write. Build runs upstream build scripts, so it is read-only
 with no checkout credential, and publish reads its metadata as JSON, never as
-shell.
+shell. Publish runs only on `main`. On other branches a run builds, tests and
+writes each archive's sha256 to the run summary.
 
 To build any version by hand, start the workflow from the Actions tab. A
 complete release is skipped. A published release that is missing assets stops
@@ -178,15 +183,19 @@ the run, because rebuilding changes checksums that people have pinned. The
 
 ### Check upstream
 
-`check-upstream.yml` runs daily at 06:40 UTC. It compares the newest
-`c2patool-v*` release in `contentauth/c2pa-rs` with the newest release here and
-builds when upstream is ahead. Only the newest version is built. When the two
-match, it also checks that the release here still holds every asset.
+`check-upstream.yml` runs daily at 06:40 UTC. It builds when the newest stable
+version on [crates.io](https://crates.io/crates/c2patool) is ahead of the newest
+release here. Only the newest version is built. When the two match, it checks
+that the release here still holds every asset.
 
-A GitHub release can appear seconds before its crates.io publish. If the tag
-build fails and crates.io answers a plain "not found", the run stops with a
-warning and the next day takes it. Any other answer, or a version still missing
-after 24 hours, is a failure.
+If the matching upstream release is missing, the check fails, unless the
+version reached crates.io less than 24 hours ago. Update the upstream settings
+in `scripts/config.sh` when that happens. To test this, run the check by hand
+with `pretend_version` set to a version that does not exist, such as `9.9.9`.
+
+If the tag build fails and crates.io answers a plain "not found", the build
+stops with a warning and the next day takes it. Any other answer, or a version
+still missing after 24 hours, is a failure.
 
 ### Keepalive
 

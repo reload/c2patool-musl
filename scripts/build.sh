@@ -17,7 +17,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "${REPO_ROOT}/scripts/config.sh"
 
 VERSION="$(normalize_version "$VERSION_INPUT")"
-TAG="$(tag_for "$VERSION")"
+UPSTREAM_URL="$(upstream_url_for "$VERSION")"
+UPSTREAM_TAG="$(upstream_tag_for "$VERSION")"
 TARGET="${TARGET:-$(target_for_host_arch)}"
 ARCHIVE="$(archive_for "$VERSION" "$TARGET")"
 REPO_URL="${REPO_URL:-https://github.com/reload/c2patool-musl}"
@@ -46,7 +47,7 @@ docker run --rm \
     -e HOST_UID="$(id -u)" \
     -e HOST_GID="$(id -g)" \
     -e UPSTREAM_URL="$UPSTREAM_URL" \
-    -e TAG_PREFIX="$TAG_PREFIX" \
+    -e UPSTREAM_TAG="$UPSTREAM_TAG" \
     -v "${REPO_ROOT}/scripts/build-in-container.sh:/build-in-container.sh:ro" \
     -v "${WORK}/out:/out" \
     -v "${WORK}/build:/build" \
@@ -55,7 +56,7 @@ docker run --rm \
     /build-in-container.sh "$VERSION" "$TARGET" || STATUS=$?
 
 if [ "$STATUS" -eq "$EXIT_NOT_ON_CRATES_IO" ]; then
-    echo "==> ${TAG} is tagged upstream but is not on crates.io yet. Nothing was built."
+    echo "==> ${UPSTREAM_TAG} is tagged upstream but is not on crates.io yet. Nothing was built."
     exit "$EXIT_NOT_ON_CRATES_IO"
 fi
 if [ "$STATUS" -ne 0 ]; then
@@ -78,7 +79,7 @@ fi
 
 # The fallback keeps producing releases, so a rotting tag build must be loud.
 if [ "$BUILD_SOURCE_KIND" = "crates-io" ]; then
-    echo "::warning::The tag build failed and ${TAG} was built from crates.io instead. Check whether the tag build is broken."
+    echo "::warning::The tag build failed and ${UPSTREAM_TAG} was built from crates.io instead. Check whether the tag build is broken."
 fi
 
 echo "==> Packaging ${ARCHIVE}"
@@ -94,10 +95,10 @@ This archive is not an official ContentAuth distribution.
 
 It contains c2patool ${VERSION}, compiled from unmodified upstream source for
 ${TARGET}. Every other file in this archive is the file that
-upstream shipped in ${TAG}.
+upstream shipped in ${UPSTREAM_TAG}.
 
 Upstream project: ${UPSTREAM_URL}
-Upstream tag:     ${TAG}
+Upstream tag:     ${UPSTREAM_TAG}
 Built from:       ${BUILD_SOURCE}
 Compiler:         ${RUSTC_VERSION}
 Target:           ${TARGET}
@@ -112,7 +113,7 @@ tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner \
 jq --arg archive "$ARCHIVE" \
    --arg file_output "$FILE_OUTPUT" \
    --arg rust_image "$RUST_IMAGE" \
-   --arg tag "$TAG" \
+   --arg tag "$UPSTREAM_TAG" \
    '. + {archive: $archive, file_output: $file_output, rust_image: $rust_image, upstream_tag: $tag}' \
    "$INFO" > "${OUTDIR}/build-info-${TARGET}.json"
 

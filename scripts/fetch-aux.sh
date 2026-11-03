@@ -13,7 +13,9 @@ OUTDIR="${2:?usage: fetch-aux.sh <version> <outdir>}"
 # shellcheck source=scripts/config.sh
 . "$(cd "$(dirname "$0")" && pwd)/config.sh"
 
-TAG="$(tag_for "$VERSION")"
+UPSTREAM_REPO="$(upstream_repo_for "$VERSION")"
+UPSTREAM_URL="$(upstream_url_for "$VERSION")"
+TAG="$(upstream_tag_for "$VERSION")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -34,7 +36,7 @@ curl_gh() {
 # once the route finishes.
 
 # Route 1: upstream's release archive, which gives the exact layout. The asset
-# name comes from the API, because upstream changed the convention once.
+# name comes from the API rather than a naming convention.
 from_release_archive() {
     stage="${WORK}/release-archive"
     rm -rf "$stage" || return 1
