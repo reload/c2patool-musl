@@ -71,19 +71,9 @@ jobs:
 
           NEWEST="$(printf '%s\n%s\n' "${OURS:-0.0.0}" "$UPSTREAM" | sort -V | tail -n 1)"
           if [ "$UPSTREAM" = "$OURS" ] || [ "$NEWEST" != "$UPSTREAM" ]; then
-            # Equal versions are not enough: a release can lose an asset, and
-            # a target added later leaves older releases short of one.
-            MISSING="$(gh release view "$(release_tag_for "$OURS")" --json assets \
-              | missing_assets "$OURS" | tr '\n' ' ')"
-            if [ -n "${MISSING// /}" ]; then
-              echo "::error::The newest release here, $(release_tag_for "$OURS"), is missing assets: ${MISSING}"
-              echo "::error::Run the build workflow by hand with force to rebuild it. That changes the published checksums."
-              exit 1
-            fi
-
-            echo "Decision: nothing to do. ${UPSTREAM} is already published here with every asset."
+            echo "Decision: nothing to do. ${UPSTREAM} is already published here."
             echo "needs_build=false" >> "$GITHUB_OUTPUT"
-            SUMMARY="Nothing to do. crates.io has \`${UPSTREAM}\`, published here is \`${OURS:-none}\`, with every asset."
+            SUMMARY="Nothing to do. crates.io has \`${UPSTREAM}\`, published here is \`${OURS:-none}\`."
           else
             REPO="$(upstream_repo_for "$UPSTREAM")"
             TAG="$(upstream_tag_for "$UPSTREAM")"

@@ -4,6 +4,8 @@
 # runs read-only and publish never executes what it produced. Publish runs only
 # on main, so a run on any other branch builds and tests without releasing.
 #
+# Releases are immutable: a published version is never rebuilt or changed.
+#
 # Permissions: contents: read to prepare and build, contents: write to publish,
 # issues: write to report a failure.
 
@@ -16,20 +18,11 @@ on:
         description: "Upstream c2patool version, for example 0.27.22"
         required: true
         type: string
-      force:
-        description: "Build and upload again, even when the release is complete. This changes the checksums of a published version."
-        required: false
-        default: false
-        type: boolean
   workflow_call:
     inputs:
       version:
         required: true
         type: string
-      force:
-        required: false
-        default: false
-        type: boolean
 
 permissions: {}
 
@@ -104,58 +97,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          V: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
-          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
-          . ./scripts/config.sh
 
-          MISSING=""
-          if ! RELEASE="$(gh release view "$TAG" --json isDraft,assets 2>/dev/null)"; then
+          if ! RELEASE="$(gh release view "$TAG" --json isDraft 2>/dev/null)"; then
             STATE=absent
           elif [ "$(jq -r .isDraft <<<"$RELEASE")" = "true" ]; then
             # A run that died mid-upload leaves a draft. A draft has no
             # consumers, so replacing it is safe.
             STATE=draft
           else
-            MISSING="$(printf '%s' "$RELEASE" | missing_assets "$V" | tr '\n' ' ')"
-            if [ -z "${MISSING// /}" ]; then
-              STATE=complete
-            else
-              STATE=incomplete
-              echo "Missing assets: ${MISSING}"
-            fi
+            STATE=published
           fi
 
           echo "Release ${TAG} is ${STATE}."
           echo "state=${STATE}" >> "$GITHUB_OUTPUT"
-
-          case "$STATE" in
-            complete)
-              if [ "$FORCE" = "true" ]; then
-                echo "The force input is set, so it is built again."
-                echo "skip=false" >> "$GITHUB_OUTPUT"
-              else
-                echo "Nothing to do."
-                echo "skip=true" >> "$GITHUB_OUTPUT"
-              fi
-              ;;
-            incomplete)
-              if [ "$FORCE" = "true" ]; then
-                echo "skip=false" >> "$GITHUB_OUTPUT"
-              else
-                # Rebuilding replaces checksums consumers pinned, so a person
-                # decides, not the schedule.
-                echo "::error::${TAG} is published but is missing assets: ${MISSING}"
-                echo "::error::Run this workflow by hand with force set to rebuild and replace it. That changes the published checksums."
-                exit 1
-              fi
-              ;;
-            *)
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
+          if [ "$STATE" = "published" ]; then
+            echo "Nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Collect the files that upstream ships beside the binary
         if: steps.release.outputs.skip != 'true'
@@ -308,7 +271,7 @@ jobs:
 
           ./scripts/release-notes.sh "$V" dist > dist/release-notes.md
 
-      - name: Create or update the release
+      - name: Create the release
         if: steps.deferred.outputs.deferred != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -338,21 +301,16 @@ jobs:
 
           if [ "$STATE" = "draft" ]; then
             echo "Replacing the leftover draft."
-            gh release delete "$TAG" --yes --cleanup-tag
-            STATE=absent
+            gh release delete "$TAG" --yes
           fi
 
-          if [ "$STATE" = "absent" ]; then
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --notes-file dist/release-notes.md \
-              --latest="$LATEST" \
-              "${ASSETS[@]}"
-          else
-            # Replaced in place, so a download never disappears.
-            gh release upload "$TAG" --clobber "${ASSETS[@]}"
-            gh release edit "$TAG" --notes-file dist/release-notes.md --latest="$LATEST"
-          fi
+          # gh uploads the assets to a draft and publishes it last, which
+          # immutable releases require.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file dist/release-notes.md \
+            --latest="$LATEST" \
+            "${ASSETS[@]}"
 
           echo "Published ${TAG}."
 

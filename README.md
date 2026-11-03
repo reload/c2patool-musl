@@ -176,17 +176,17 @@ with no checkout credential, and publish reads its metadata as JSON, never as
 shell. Publish runs only on `main`. On other branches a run builds, tests and
 writes each archive's sha256 to the run summary.
 
+Releases are immutable. Once published, a release's assets and tag cannot
+change, so pinned checksums stay valid.
+
 To build any version by hand, start the workflow from the Actions tab. A
-complete release is skipped. A published release that is missing assets stops
-the run, because rebuilding changes checksums that people have pinned. The
-`force` input rebuilds it anyway. A leftover draft is replaced without asking.
+published version is skipped. A leftover draft is replaced without asking.
 
 ### Check upstream
 
 `check-upstream.yml` runs daily at 06:40 UTC. It builds when the newest stable
 version on [crates.io](https://crates.io/crates/c2patool) is ahead of the newest
-release here. Only the newest version is built. When the two match, it checks
-that the release here still holds every asset.
+release here. Only the newest version is built.
 
 If the matching upstream release is missing, the check fails, unless the
 version reached crates.io less than 24 hours ago. Update the upstream settings
