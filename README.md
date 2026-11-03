@@ -34,8 +34,9 @@ Linux containers on an Apple Silicon Mac. For the macOS host itself, use the
 
 Two things to know before you depend on it. The binary links its own OpenSSL,
 which no system update will patch, so a new c2patool release is the only route
-to an OpenSSL fix. The artifacts are not signed. `SHA256SUMS` protects against a
-damaged download, not against a compromised release.
+to an OpenSSL fix. Each archive has a signed build provenance attestation. It
+proves that this repository's workflow built the archive from a given commit,
+not that the upstream source is sound. 0.27.22 and 0.28.4 have none.
 
 ## Install
 
@@ -60,6 +61,9 @@ The `grep` takes one line out of `SHA256SUMS`, because BusyBox on Alpine has no
 `--ignore-missing`. On macOS, use `shasum -a 256 -c -`. The same checksums are
 in the release notes, and the archive holds a `MUSL-BUILD.txt` that names the
 upstream tag and the compiler.
+
+The checksum catches a damaged download. With the GitHub CLI, `gh attestation
+verify "$ARCHIVE" --repo reload/c2patool-musl` also checks where it was built.
 
 `https://github.com/reload/c2patool-musl/releases/latest/download/c2patool-${TARGET}.tar.gz`
 always points at the newest release.
@@ -166,10 +170,10 @@ tests the binary in `alpine:3.24` and in `debian:bookworm-slim`:
 2. `c2patool sample/C.jpg` exits 0 and prints `active_manifest`.
 3. `c2patool sample/image.jpg` exits 1 and prints `No claim found`.
 
-Publish waits for every target, writes one `SHA256SUMS`, creates the release,
-and downloads it back to compare against that file. Each release holds the
-versioned archive per target, a copy at a name without the version for the
-`/latest/` URL, and `SHA256SUMS`.
+Publish waits for every target, writes one `SHA256SUMS`, attests the build
+provenance of every archive, creates the release, and downloads it back to
+compare against that file. Each release holds the versioned archive per target,
+a copy at a name without the version for the `/latest/` URL, and `SHA256SUMS`.
 
 Only publish can write. Build runs upstream build scripts, so it is read-only
 with no checkout credential, and publish reads its metadata as JSON, never as
@@ -213,7 +217,8 @@ pinned to a commit digest, and Dependabot proposes updates weekly after a seven
 day cooldown.
 
 Permissions: `contents: read` to prepare, build, check and lint. `contents:
-write` to publish and to push the keepalive commit. `issues: write` to report a
+write` to publish and to push the keepalive commit. `id-token: write` and
+`attestations: write` to attest, in publish only. `issues: write` to report a
 failure.
 
 ## License
